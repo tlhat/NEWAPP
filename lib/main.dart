@@ -347,6 +347,8 @@ class ChildProfile {
   int usedMinutesToday;
   int watchedVideosToday;
   int correctPronunciationsCount;
+  int intelligencePoints;
+  int gamesCompletedCount;
   List<String> completedActivities;
   List<String> likedVideoIds;
 
@@ -360,6 +362,8 @@ class ChildProfile {
     this.usedMinutesToday = 0,
     this.watchedVideosToday = 0,
     this.correctPronunciationsCount = 0,
+    this.intelligencePoints = 10,
+    this.gamesCompletedCount = 0,
     List<String>? completedActivities,
     List<String>? likedVideoIds,
   })  : completedActivities = completedActivities ?? [],
@@ -387,6 +391,12 @@ class ChildProfile {
       correctPronunciationsCount: int.tryParse(
               json['correctPronunciationsCount']?.toString() ?? '0') ??
           0,
+      intelligencePoints: int.tryParse(
+              json['intelligencePoints']?.toString() ?? '10') ??
+          10,
+      gamesCompletedCount: int.tryParse(
+              json['gamesCompletedCount']?.toString() ?? '0') ??
+          0,
       completedActivities: (json['completedActivities'] as List<dynamic>?)
               ?.map((e) => e.toString())
               .toList() ??
@@ -409,6 +419,8 @@ class ChildProfile {
       'usedMinutesToday': usedMinutesToday,
       'watchedVideosToday': watchedVideosToday,
       'correctPronunciationsCount': correctPronunciationsCount,
+      'intelligencePoints': intelligencePoints,
+      'gamesCompletedCount': gamesCompletedCount,
       'completedActivities': completedActivities,
       'likedVideoIds': likedVideoIds,
     };
@@ -1698,6 +1710,35 @@ class AppStateManager extends ChangeNotifier {
     if (currentAccount == null) return;
     currentAccount!.warmEveningFilter =
         newValue ?? !currentAccount!.warmEveningFilter;
+    await _saveAccounts();
+    notifyListeners();
+  }
+
+  Future<void> recordBrainGameWin({
+    required String gameId,
+    required String gameTitle,
+    int earnedIqPoints = 15,
+    int earnedStars = 2,
+  }) async {
+    if (currentAccount == null) return;
+    final child = currentAccount!.activeChild;
+    child.starsEarned += earnedStars;
+    child.intelligencePoints += earnedIqPoints;
+    child.gamesCompletedCount++;
+    final String key = 'game_${gameId}_${DateTime.now().millisecondsSinceEpoch}';
+    child.completedActivities.add(key);
+
+    if (currentAccount!.emailNotificationsEnabled &&
+        child.gamesCompletedCount % 2 == 0) {
+      await sendParentEmailAlert(
+        subject:
+            '🧠 تطور قدرات الذكاء للطفل ${child.name} في «$gameTitle»!',
+        bodyMessage:
+            'أنجز ${child.name} تحدياً جديداً في لعبة ($gameTitle) وارتفعت نقاط الذكاء والقدرات لديه إلى ${child.intelligencePoints} نقطة مع ${child.starsEarned} نجمة!',
+        customSuggestion:
+            '💡 اقتراح تربوي: شجع ${child.name} على التنوع بين ألعاب الذاكرة البصرية والمنطق والحساب لتنمية نصفي الدماغ معاً.',
+      );
+    }
     await _saveAccounts();
     notifyListeners();
   }
@@ -3480,6 +3521,15 @@ class _VerticalVideoFeedPlayerScreenState
     widget.appState.recordVideoTransitionWatched();
   }
 
+  void _openBrainGamesHub() {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => BrainGamesHubScreen(appState: widget.appState),
+      ),
+    );
+  }
+
   void _jumpToSuggestedVideo(VideoModel target) {
     setState(() {
       _selectedCategory = 'all';
@@ -4309,6 +4359,7 @@ class _VerticalVideoFeedPlayerScreenState
                   onHeroActivityTap: () =>
                       _openRealWorldHeroActivityModal(item),
                   onVoiceAssistantTap: _openSmartVoiceAssistantModal,
+                  onBrainGamesTap: _openBrainGamesHub,
                 );
               },
             ),
@@ -4395,6 +4446,33 @@ class _VerticalVideoFeedPlayerScreenState
                         ),
                       ),
                       const Spacer(),
+                      GestureDetector(
+                        onTap: _openBrainGamesHub,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 9, vertical: 6),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFA855F7).withOpacity(0.9),
+                            borderRadius: BorderRadius.circular(20),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const Text('🧠', style: TextStyle(fontSize: 13)),
+                              const SizedBox(width: 4),
+                              Text(
+                                'ألعاب الذكاء (${activeChild.intelligencePoints})',
+                                style: const TextStyle(
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.bold,
+                                  color: Colors.white,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 6),
                       GestureDetector(
                         onTap: _openSmartVoiceAssistantModal,
                         child: Container(
@@ -4699,6 +4777,7 @@ class VerticalVideoFeedItemWidget extends StatefulWidget {
   final VoidCallback onRepeatPhraseTap;
   final VoidCallback onHeroActivityTap;
   final VoidCallback onVoiceAssistantTap;
+  final VoidCallback onBrainGamesTap;
 
   const VerticalVideoFeedItemWidget({
     super.key,
@@ -4708,6 +4787,7 @@ class VerticalVideoFeedItemWidget extends StatefulWidget {
     required this.onRepeatPhraseTap,
     required this.onHeroActivityTap,
     required this.onVoiceAssistantTap,
+    required this.onBrainGamesTap,
   });
 
   @override
@@ -4930,12 +5010,19 @@ class _VerticalVideoFeedItemWidgetState
                   ),
                   const SizedBox(height: 14),
                   _SideActionButton(
+                    icon: Icons.psychology_rounded,
+                    iconColor: const Color(0xFFC084FC),
+                    label: 'ألعاب الذكاء',
+                    onTap: widget.onBrainGamesTap,
+                  ),
+                  const SizedBox(height: 12),
+                  _SideActionButton(
                     icon: Icons.assistant_rounded,
                     iconColor: const Color(0xFF38BDF8),
                     label: 'مساعد ذكي',
                     onTap: widget.onVoiceAssistantTap,
                   ),
-                  const SizedBox(height: 14),
+                  const SizedBox(height: 12),
                   _SideActionButton(
                     icon: _isMuted ? Icons.volume_off : Icons.volume_up,
                     iconColor: Colors.white,
@@ -6507,8 +6594,8 @@ class _ParentalStudioScreenState extends State<ParentalStudioScreen>
                           style: const TextStyle(fontWeight: FontWeight.bold),
                         ),
                         subtitle: Text(
-                          'الحصة اليومية: ${child.dailyTimeLimit} دقيقة • ⭐ ${child.starsEarned} • فصاحة: ${child.correctPronunciationsCount}',
-                          style: const TextStyle(color: Colors.white70),
+                          'الحصة: ${child.dailyTimeLimit}د • ⭐ ${child.starsEarned} • 🧠 ذكاء: ${child.intelligencePoints} (${child.gamesCompletedCount} ألعاب) • 🗣️ فصاحة: ${child.correctPronunciationsCount}',
+                          style: const TextStyle(color: Colors.white70, fontSize: 12),
                         ),
                         trailing: Row(
                           mainAxisSize: MainAxisSize.min,
@@ -6799,6 +6886,1120 @@ class _ParentalStudioScreenState extends State<ParentalStudioScreen>
           ),
         );
       },
+    );
+  }
+}
+
+class BrainGamesHubScreen extends StatefulWidget {
+  final AppStateManager appState;
+  const BrainGamesHubScreen({super.key, required this.appState});
+
+  @override
+  State<BrainGamesHubScreen> createState() => _BrainGamesHubScreenState();
+}
+
+class _BrainGamesHubScreenState extends State<BrainGamesHubScreen> {
+  int _selectedGameIndex = 0;
+
+  int _memoryMoves = 0;
+  int _memoryMatches = 0;
+  List<String> _memoryBoard = [];
+  List<bool> _memoryRevealed = [];
+  List<bool> _memorySolved = [];
+  int? _firstFlippedIndex;
+  bool _memoryBusy = false;
+
+  int _patternQuestionIndex = 0;
+  String? _patternFeedback;
+  bool _patternCorrect = false;
+
+  int _mathTargetCount = 3;
+  String _mathEmoji = '🍎';
+  List<int> _mathOptions = [2, 3, 5, 4];
+  String? _mathFeedback;
+  bool _mathAnswered = false;
+
+  int _wordQuestionIndex = 0;
+  String? _wordFeedback;
+  bool _wordCorrect = false;
+
+  int _oddQuestionIndex = 0;
+  String? _oddFeedback;
+  bool _oddCorrect = false;
+
+  static const List<Map<String, dynamic>> _patternQuestions = [
+    {
+      'sequence': ['🌙', '⭐', '🌙', '⭐', '🌙'],
+      'options': ['⭐', '☀️', '🍎', '🚗'],
+      'answer': '⭐',
+      'hint': 'لاحظ التتابع: هلال ثم نجمة ثم هلال ثم نجمة... ماذا يأتي بعد الهلال؟',
+    },
+    {
+      'sequence': ['🟥', '🟦', '🟥', '🟦', '🟥'],
+      'options': ['🟩', '🟦', '🟨', '🟪'],
+      'answer': '🟦',
+      'hint': 'أحمر ثم أزرق ثم أحمر ثم أزرق... ما هو اللون التالي بعد الأحمر؟',
+    },
+    {
+      'sequence': ['🌱', '🌿', '🌳', '🌱', '🌿'],
+      'options': ['🌳', '🍎', '🦋', '🎈'],
+      'answer': '🌳',
+      'hint': 'بذرة صغيرة ثم نبتة ثم شجرة كبيرة... ما الذي يكمل الدورة؟',
+    },
+    {
+      'sequence': ['🐱', '🐱', '🐰', '🐱', '🐱'],
+      'options': ['🦁', '🐰', '🐸', '🐼'],
+      'answer': '🐰',
+      'hint': 'قطتان ثم أرنب، قطتان ثم... ماذا؟',
+    },
+  ];
+
+  static const List<Map<String, dynamic>> _arabicWordQuestions = [
+    {
+      'emoji': '🦁',
+      'word': 'أَسَد',
+      'missingDisplay': 'ـسَد',
+      'prompt': 'اختر الحرف الأول لكلمة (أَسَد):',
+      'options': ['أ', 'ب', 'ت', 'س'],
+      'answer': 'أ',
+    },
+    {
+      'emoji': '🍎',
+      'word': 'تُفَّاحَة',
+      'missingDisplay': 'ـفَّاحَة',
+      'prompt': 'اختر الحرف الأول لكلمة (تُفَّاحَة):',
+      'options': ['ج', 'ت', 'خ', 'م'],
+      'answer': 'ت',
+    },
+    {
+      'emoji': '🌙',
+      'word': 'قَمَر',
+      'missingDisplay': 'ـمَر',
+      'prompt': 'اختر الحرف الأول لكلمة (قَمَر):',
+      'options': ['ف', 'ق', 'ك', 'ل'],
+      'answer': 'ق',
+    },
+    {
+      'emoji': '🦋',
+      'word': 'فَرَاشَة',
+      'missingDisplay': 'ـرَاشَة',
+      'prompt': 'اختر الحرف الأول لكلمة (فَرَاشَة):',
+      'options': ['ص', 'ض', 'ف', 'ن'],
+      'answer': 'ف',
+    },
+  ];
+
+  static const List<Map<String, dynamic>> _oddOneOutQuestions = [
+    {
+      'title': 'أخرج الشكل المختلف لتنمية قوة الملاحظة والتصنيف:',
+      'items': ['🍎', '🍌', '🍇', '🚗'],
+      'odd': '🚗',
+      'explanation': 'السيارة وسيلة مواصلات، بينما التفاحة والموز والعنب من الفواكه اللذيذة!',
+    },
+    {
+      'title': 'أي عنصر من هذه العناصر يختلف عن الباقين؟',
+      'items': ['🐱', '🐰', '🦁', '🌲'],
+      'odd': '🌲',
+      'explanation': 'الشجرة من النباتات، بينما القطة والأرنب والأسد من الحيوانات!',
+    },
+    {
+      'title': 'ابحث بدقة عن الرمز المختلف في السماء:',
+      'items': ['☀️', '🌙', '⭐', '👟'],
+      'odd': '👟',
+      'explanation': 'الحذاء نرتديه في أقدامنا، أما الشمس والقمر والنجمة فتوجد في السماء!',
+    },
+    {
+      'title': 'أخرج العنصر غير المشابه للبقية:',
+      'items': ['✏️', '📘', '🖍️', '🍕'],
+      'odd': '🍕',
+      'explanation': 'البيتزا طعام، بينما القلم والكتاب والألوان أدوات مدرسية للتعلم!',
+    },
+  ];
+
+  @override
+  void initState() {
+    super.initState();
+    _initMemoryGame();
+    _generateMathRound();
+    final childName =
+        widget.appState.currentAccount?.activeChild.name ?? 'بطل حنين';
+    CalmVoiceService.instance.speakCalmly(
+      'أهلاً بك يا $childName في واحة ألعاب الذكاء وتنمية القدرات! اختر اللعبة التي تحبها لنفكر ونلعب بهدوء.',
+    );
+  }
+
+  void _initMemoryGame() {
+    final List<String> pairs = [
+      '🦁',
+      '🦁',
+      '🦋',
+      '🦋',
+      '🌙',
+      '🌙',
+      '🍎',
+      '🍎',
+      '🚀',
+      '🚀',
+      '🐬',
+      '🐬'
+    ];
+    pairs.shuffle(Random());
+    setState(() {
+      _memoryBoard = pairs;
+      _memoryRevealed = List<bool>.filled(pairs.length, false);
+      _memorySolved = List<bool>.filled(pairs.length, false);
+      _firstFlippedIndex = null;
+      _memoryMoves = 0;
+      _memoryMatches = 0;
+      _memoryBusy = false;
+    });
+  }
+
+  Future<void> _onMemoryCardTap(int index) async {
+    if (_memoryBusy || _memoryRevealed[index] || _memorySolved[index]) return;
+
+    setState(() {
+      _memoryRevealed[index] = true;
+    });
+
+    if (_firstFlippedIndex == null) {
+      _firstFlippedIndex = index;
+      return;
+    }
+
+    final int firstIdx = _firstFlippedIndex!;
+    _firstFlippedIndex = null;
+    _memoryMoves++;
+
+    if (_memoryBoard[firstIdx] == _memoryBoard[index]) {
+      setState(() {
+        _memorySolved[firstIdx] = true;
+        _memorySolved[index] = true;
+        _memoryMatches++;
+      });
+
+      if (_memoryMatches == _memoryBoard.length ~/ 2) {
+        await widget.appState.recordBrainGameWin(
+          gameId: 'memory_match',
+          gameTitle: 'لعبة الذاكرة البصرية والتركيز',
+          earnedIqPoints: 20,
+          earnedStars: 2,
+        );
+        CalmVoiceService.instance.speakCalmly(
+          'ما شاء الله! ذاكرتك البصرية قوية جداً يا بطل! حصلت على عشرين نقطة ذكاء ونجمتين!',
+        );
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text(
+                  '🎉 بطل الذاكرة! ربحت +20 نقطة ذكاء و +2 نجمة!'),
+              backgroundColor: Color(0xFF14B8A6),
+            ),
+          );
+        }
+      } else {
+        CalmVoiceService.instance.speakCalmly('تطابق رائع! استمر يا بطل.');
+      }
+    } else {
+      _memoryBusy = true;
+      await Future.delayed(const Duration(milliseconds: 750));
+      if (mounted) {
+        setState(() {
+          _memoryRevealed[firstIdx] = false;
+          _memoryRevealed[index] = false;
+          _memoryBusy = false;
+        });
+      }
+    }
+  }
+
+  void _generateMathRound() {
+    final random = Random();
+    final List<String> emojis = ['🍎', '⭐', '🦋', '🎈', '🍓', '🐠'];
+    final int target = random.nextInt(7) + 2;
+    final Set<int> opts = {target};
+    while (opts.length < 4) {
+      opts.add(random.nextInt(9) + 1);
+    }
+    final List<int> shuffled = opts.toList()..shuffle(random);
+    setState(() {
+      _mathTargetCount = target;
+      _mathEmoji = emojis[random.nextInt(emojis.length)];
+      _mathOptions = shuffled;
+      _mathFeedback = null;
+      _mathAnswered = false;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: widget.appState,
+      builder: (context, _) {
+        final child = widget.appState.currentAccount?.activeChild;
+        if (child == null) return const SizedBox.shrink();
+
+        final List<Map<String, dynamic>> gamesMeta = [
+          {
+            'title': 'الذاكرة البصرية',
+            'icon': '🃏',
+            'skill': 'تنمية التركيز والذاكرة قصيرة المدى',
+            'color': const Color(0xFF14B8A6),
+          },
+          {
+            'title': 'الألغاز والمنطق',
+            'icon': '🧩',
+            'skill': 'استنتاج الأنماط والتفكير المنطقي',
+            'color': const Color(0xFFF59E0B),
+          },
+          {
+            'title': 'الحساب والعدّ',
+            'icon': '🔢',
+            'skill': 'تنمية الذكاء الرياضي والعدّ البصري',
+            'color': const Color(0xFF38BDF8),
+          },
+          {
+            'title': 'الحروف والكلمات',
+            'icon': '🔤',
+            'skill': 'الذكاء اللغوي ومخارج الحروف العربية',
+            'color': const Color(0xFFA855F7),
+          },
+          {
+            'title': 'قوة الملاحظة',
+            'icon': '🔍',
+            'skill': 'التصنيف الذكي واكتشاف الشكل المختلف',
+            'color': const Color(0xFFEC4899),
+          },
+        ];
+
+        return Scaffold(
+          appBar: AppBar(
+            backgroundColor: const Color(0xFF1E293B),
+            title: const Text(
+              '🧠 واحة ألعاب الذكاء وتنمية القدرات',
+              style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold),
+            ),
+          ),
+          body: Container(
+            decoration: const BoxDecoration(
+              gradient: LinearGradient(
+                colors: [Color(0xFF1E1B4B), Color(0xFF0F172A)],
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+              ),
+            ),
+            child: SafeArea(
+              child: Column(
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+                    child: Container(
+                      padding: const EdgeInsets.all(14),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF1E293B),
+                        borderRadius: BorderRadius.circular(18),
+                        border: Border.all(
+                            color: const Color(0xFFA855F7).withOpacity(0.6)),
+                      ),
+                      child: Row(
+                        children: [
+                          Text(child.chosenAvatar,
+                              style: const TextStyle(fontSize: 36)),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  'البطل الذكي: ${child.name}',
+                                  style: const TextStyle(
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.bold,
+                                    color: Colors.white,
+                                  ),
+                                ),
+                                const SizedBox(height: 4),
+                                Text(
+                                  'نقاط الذكاء (IQ): 🧠 ${child.intelligencePoints} • النجوم: ⭐ ${child.starsEarned} • التحديات: ${child.gamesCompletedCount}',
+                                  style: const TextStyle(
+                                    fontSize: 12,
+                                    color: Color(0xFFFDE68A),
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          IconButton(
+                            onPressed: () {
+                              final meta = gamesMeta[_selectedGameIndex];
+                              CalmVoiceService.instance.speakCalmly(
+                                'أنت الآن في لعبة ${meta['title']} لتنمية ${meta['skill']}.',
+                              );
+                            },
+                            icon: const Icon(Icons.volume_up_rounded,
+                                color: Color(0xFF38BDF8)),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  SizedBox(
+                    height: 82,
+                    child: ListView.builder(
+                      scrollDirection: Axis.horizontal,
+                      padding: const EdgeInsets.symmetric(horizontal: 12),
+                      itemCount: gamesMeta.length,
+                      itemBuilder: (ctx, i) {
+                        final g = gamesMeta[i];
+                        final bool isSelected = _selectedGameIndex == i;
+                        final Color accent = g['color'] as Color;
+                        return GestureDetector(
+                          onTap: () {
+                            setState(() => _selectedGameIndex = i);
+                            CalmVoiceService.instance.speakCalmly(
+                              'لعبة ${g['title']}، ${g['skill']}',
+                            );
+                          },
+                          child: AnimatedContainer(
+                            duration: const Duration(milliseconds: 220),
+                            width: 145,
+                            margin: const EdgeInsets.symmetric(
+                                horizontal: 5, vertical: 4),
+                            padding: const EdgeInsets.all(10),
+                            decoration: BoxDecoration(
+                              color: isSelected
+                                  ? accent.withOpacity(0.25)
+                                  : const Color(0xFF1E293B),
+                              borderRadius: BorderRadius.circular(16),
+                              border: Border.all(
+                                color: isSelected ? accent : Colors.white12,
+                                width: isSelected ? 2 : 1,
+                              ),
+                            ),
+                            child: Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Text(g['icon'] as String,
+                                    style: const TextStyle(fontSize: 24)),
+                                const SizedBox(height: 4),
+                                Text(
+                                  g['title'] as String,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.bold,
+                                    color: Colors.white,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                  Expanded(
+                    child: SingleChildScrollView(
+                      padding: const EdgeInsets.all(16),
+                      child: _buildActiveBrainGameCard(),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildActiveBrainGameCard() {
+    switch (_selectedGameIndex) {
+      case 0:
+        return _buildMemoryMatchGame();
+      case 1:
+        return _buildPatternLogicGame();
+      case 2:
+        return _buildVisualMathGame();
+      case 3:
+        return _buildArabicWordBuilderGame();
+      case 4:
+        return _buildOddOneOutGame();
+      default:
+        return _buildMemoryMatchGame();
+    }
+  }
+
+  Widget _buildMemoryMatchGame() {
+    return Container(
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1E293B),
+        borderRadius: BorderRadius.circular(22),
+        border: Border.all(color: const Color(0xFF14B8A6).withOpacity(0.5)),
+      ),
+      child: Column(
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      '🃏 تحدي الذاكرة البصرية والتركيز الهادئ',
+                      style: TextStyle(
+                        fontSize: 17,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.white,
+                      ),
+                    ),
+                    SizedBox(height: 4),
+                    Text(
+                      'اقلب البطاقات وتذكر أماكن الصور المتشابهة لتقوية الذاكرة!',
+                      style: TextStyle(fontSize: 12, color: Colors.white70),
+                    ),
+                  ],
+                ),
+              ),
+              OutlinedButton.icon(
+                onPressed: _initMemoryGame,
+                icon: const Icon(Icons.refresh, size: 16),
+                label: const Text('جولة جديدة'),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+            children: [
+              Chip(
+                backgroundColor: const Color(0xFF0F172A),
+                label: Text('المحاولات: $_memoryMoves'),
+              ),
+              Chip(
+                backgroundColor: const Color(0xFF0F172A),
+                label: Text(
+                    'التطابقات: $_memoryMatches / ${_memoryBoard.length ~/ 2}'),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          GridView.builder(
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+              crossAxisCount: 4,
+              mainAxisSpacing: 10,
+              crossAxisSpacing: 10,
+              childAspectRatio: 1.0,
+            ),
+            itemCount: _memoryBoard.length,
+            itemBuilder: (ctx, index) {
+              final bool isUp =
+                  _memoryRevealed[index] || _memorySolved[index];
+              final bool isSolved = _memorySolved[index];
+              return GestureDetector(
+                onTap: () => _onMemoryCardTap(index),
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 220),
+                  decoration: BoxDecoration(
+                    color: isSolved
+                        ? const Color(0xFF14B8A6).withOpacity(0.3)
+                        : isUp
+                            ? const Color(0xFF334155)
+                            : const Color(0xFF0F172A),
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(
+                      color: isSolved
+                          ? const Color(0xFF14B8A6)
+                          : isUp
+                              ? const Color(0xFFF59E0B)
+                              : Colors.white24,
+                      width: 2,
+                    ),
+                  ),
+                  child: Center(
+                    child: Text(
+                      isUp ? _memoryBoard[index] : '❓',
+                      style: const TextStyle(fontSize: 30),
+                    ),
+                  ),
+                ),
+              );
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildPatternLogicGame() {
+    final q = _patternQuestions[_patternQuestionIndex % _patternQuestions.length];
+    final List<String> seq = List<String>.from(q['sequence'] as List);
+    final List<String> opts = List<String>.from(q['options'] as List);
+    final String ans = q['answer'] as String;
+    final String hint = q['hint'] as String;
+
+    return Container(
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1E293B),
+        borderRadius: BorderRadius.circular(22),
+        border: Border.all(color: const Color(0xFFF59E0B).withOpacity(0.5)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Expanded(
+                child: Text(
+                  '🧩 مختبر المنطق واستنتاج الأنماط',
+                  style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold),
+                ),
+              ),
+              IconButton(
+                onPressed: () => CalmVoiceService.instance.speakCalmly(hint),
+                icon: const Icon(Icons.volume_up_rounded,
+                    color: Color(0xFFF59E0B)),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Text(
+            hint,
+            textAlign: TextAlign.center,
+            style: const TextStyle(fontSize: 13, color: Colors.white70),
+          ),
+          const SizedBox(height: 18),
+          Container(
+            padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 12),
+            decoration: BoxDecoration(
+              color: const Color(0xFF0F172A),
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: Wrap(
+              alignment: WrapAlignment.center,
+              spacing: 10,
+              children: [
+                ...seq.map((s) => Text(s, style: const TextStyle(fontSize: 32))),
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFF59E0B).withOpacity(0.2),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: const Color(0xFFF59E0B)),
+                  ),
+                  child: const Text('؟',
+                      style:
+                          TextStyle(fontSize: 28, fontWeight: FontWeight.bold)),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 18),
+          const Text('اختر الشكل الصحيح لإكمال النمط المنطقي:'),
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 12,
+            runSpacing: 12,
+            children: opts.map((option) {
+              return ElevatedButton(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF0F172A),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 22, vertical: 14),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(16),
+                    side: const BorderSide(color: Colors.white24),
+                  ),
+                ),
+                onPressed: () async {
+                  if (option == ans) {
+                    setState(() {
+                      _patternCorrect = true;
+                      _patternFeedback =
+                          '✅ تفكير منطقي عبقري! الإجابة ($option) صحيحة تماماً (+15 نقطة ذكاء)';
+                    });
+                    await widget.appState.recordBrainGameWin(
+                      gameId: 'pattern_logic',
+                      gameTitle: 'مختبر المنطق والأنماط',
+                      earnedIqPoints: 15,
+                      earnedStars: 1,
+                    );
+                    CalmVoiceService.instance.speakCalmly(
+                      'أحسنت التفكير المنطقي يا بطل! إجابتك صحيحة وحصلت على خمس عشرة نقطة ذكاء!',
+                    );
+                  } else {
+                    setState(() {
+                      _patternCorrect = false;
+                      _patternFeedback =
+                          '💡 تأمل الترتيب مرة أخرى بهدوء وحاول مجدداً!';
+                    });
+                    CalmVoiceService.instance.speakCalmly(
+                      'فكر بهدوء يا بطل، لاحظ الترتيب وحاول مرة أخرى.',
+                    );
+                  }
+                },
+                child: Text(option, style: const TextStyle(fontSize: 30)),
+              );
+            }).toList(),
+          ),
+          if (_patternFeedback != null) ...[
+            const SizedBox(height: 14),
+            Text(
+              _patternFeedback!,
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontWeight: FontWeight.bold,
+                color: _patternCorrect
+                    ? const Color(0xFF14B8A6)
+                    : const Color(0xFFF59E0B),
+              ),
+            ),
+          ],
+          const SizedBox(height: 14),
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton.icon(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFFF59E0B),
+                foregroundColor: Colors.black87,
+              ),
+              onPressed: () {
+                setState(() {
+                  _patternQuestionIndex++;
+                  _patternFeedback = null;
+                  _patternCorrect = false;
+                });
+              },
+              icon: const Icon(Icons.navigate_next),
+              label: const Text(
+                'اللغز المنطقي التالي',
+                style: TextStyle(fontWeight: FontWeight.bold),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildVisualMathGame() {
+    return Container(
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1E293B),
+        borderRadius: BorderRadius.circular(22),
+        border: Border.all(color: const Color(0xFF38BDF8).withOpacity(0.5)),
+      ),
+      child: Column(
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Expanded(
+                child: Text(
+                  '🔢 مغامرة الحساب والعدّ البصري الهادئ',
+                  style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold),
+                ),
+              ),
+              IconButton(
+                onPressed: () => CalmVoiceService.instance.speakCalmly(
+                  'عدّ الأشكال بهدوء يا بطل ثم اختر الرقم الصحيح!',
+                ),
+                icon: const Icon(Icons.volume_up_rounded,
+                    color: Color(0xFF38BDF8)),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          const Text(
+            'عدّ العناصر الموجودة داخل الصندوق واختر العدد الصحيح:',
+            style: TextStyle(fontSize: 13, color: Colors.white70),
+          ),
+          const SizedBox(height: 16),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(20),
+            decoration: BoxDecoration(
+              color: const Color(0xFF0F172A),
+              borderRadius: BorderRadius.circular(18),
+              border: Border.all(color: Colors.white12),
+            ),
+            child: Wrap(
+              alignment: WrapAlignment.center,
+              spacing: 14,
+              runSpacing: 14,
+              children: List.generate(
+                _mathTargetCount,
+                (_) => Text(_mathEmoji, style: const TextStyle(fontSize: 38)),
+              ),
+            ),
+          ),
+          const SizedBox(height: 18),
+          Wrap(
+            spacing: 12,
+            runSpacing: 12,
+            children: _mathOptions.map((numOpt) {
+              return ElevatedButton(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF0F172A),
+                  foregroundColor: Colors.white,
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 26, vertical: 14),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(16),
+                    side: const BorderSide(color: Color(0xFF38BDF8)),
+                  ),
+                ),
+                onPressed: () async {
+                  if (numOpt == _mathTargetCount) {
+                    if (!_mathAnswered) {
+                      _mathAnswered = true;
+                      await widget.appState.recordBrainGameWin(
+                        gameId: 'visual_math',
+                        gameTitle: 'مغامرة الحساب والعدّ البصري',
+                        earnedIqPoints: 15,
+                        earnedStars: 1,
+                      );
+                    }
+                    setState(() {
+                      _mathFeedback =
+                          '🎉 أحسنت العدّ! العدد الصحيح هو ($numOpt) (+15 نقطة ذكاء)';
+                    });
+                    CalmVoiceService.instance.speakCalmly(
+                      'رائع يا بطل الحساب! العدد هو $numOpt، إجابة صحيحة!',
+                    );
+                  } else {
+                    setState(() {
+                      _mathFeedback =
+                          '🔢 عدّ الأشكال بأصابعك مرة أخرى بهدوء وحاول مجدداً!';
+                    });
+                    CalmVoiceService.instance.speakCalmly(
+                      'هيا نعدّ الأشكال معاً ببطء ونحاول مرة أخرى.',
+                    );
+                  }
+                },
+                child: Text(
+                  '$numOpt',
+                  style: const TextStyle(
+                      fontSize: 24, fontWeight: FontWeight.bold),
+                ),
+              );
+            }).toList(),
+          ),
+          if (_mathFeedback != null) ...[
+            const SizedBox(height: 14),
+            Text(
+              _mathFeedback!,
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                  fontWeight: FontWeight.bold, color: Color(0xFF38BDF8)),
+            ),
+          ],
+          const SizedBox(height: 16),
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton.icon(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF38BDF8),
+                foregroundColor: Colors.black87,
+              ),
+              onPressed: _generateMathRound,
+              icon: const Icon(Icons.refresh),
+              label: const Text(
+                'مسألة عدّ جديدة',
+                style: TextStyle(fontWeight: FontWeight.bold),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildArabicWordBuilderGame() {
+    final q =
+        _arabicWordQuestions[_wordQuestionIndex % _arabicWordQuestions.length];
+    final String emoji = q['emoji'] as String;
+    final String fullWord = q['word'] as String;
+    final String missingDisplay = q['missingDisplay'] as String;
+    final String prompt = q['prompt'] as String;
+    final List<String> opts = List<String>.from(q['options'] as List);
+    final String ans = q['answer'] as String;
+
+    return Container(
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1E293B),
+        borderRadius: BorderRadius.circular(22),
+        border: Border.all(color: const Color(0xFFA855F7).withOpacity(0.5)),
+      ),
+      child: Column(
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Expanded(
+                child: Text(
+                  '🔤 تركيب الحروف والذكاء اللغوي العربي',
+                  style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold),
+                ),
+              ),
+              IconButton(
+                onPressed: () => CalmVoiceService.instance.speakCalmly(
+                  '$prompt الكلمة هي $fullWord',
+                  rate: 0.34,
+                ),
+                icon: const Icon(Icons.volume_up_rounded,
+                    color: Color(0xFFA855F7)),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Text(emoji, style: const TextStyle(fontSize: 56)),
+          const SizedBox(height: 8),
+          Text(
+            prompt,
+            style: const TextStyle(fontSize: 14, color: Colors.white70),
+          ),
+          const SizedBox(height: 10),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 12),
+            decoration: BoxDecoration(
+              color: const Color(0xFF0F172A),
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: Text(
+              _wordCorrect ? fullWord : '؟ $missingDisplay',
+              style: const TextStyle(
+                fontSize: 28,
+                fontWeight: FontWeight.bold,
+                color: Color(0xFFFDE68A),
+              ),
+            ),
+          ),
+          const SizedBox(height: 16),
+          Wrap(
+            spacing: 12,
+            runSpacing: 12,
+            children: opts.map((letter) {
+              return ElevatedButton(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF0F172A),
+                  foregroundColor: Colors.white,
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(16),
+                    side: const BorderSide(color: Color(0xFFA855F7)),
+                  ),
+                ),
+                onPressed: () async {
+                  if (letter == ans) {
+                    setState(() {
+                      _wordCorrect = true;
+                      _wordFeedback =
+                          '✅ أحسنت يا فصيح! حرف ($letter) يكمل كلمة ($fullWord) (+15 نقطة ذكاء)';
+                    });
+                    await widget.appState.recordBrainGameWin(
+                      gameId: 'arabic_word_builder',
+                      gameTitle: 'تركيب الحروف والذكاء اللغوي',
+                      earnedIqPoints: 15,
+                      earnedStars: 1,
+                    );
+                    CalmVoiceService.instance.speakCalmly(
+                      'ممتاز! حرف $letter، $fullWord!',
+                      rate: 0.35,
+                    );
+                  } else {
+                    setState(() {
+                      _wordCorrect = false;
+                      _wordFeedback =
+                          '🗣️ استمع لصوت الكلمة مرة أخرى وجرب حرفاً آخر!';
+                    });
+                    CalmVoiceService.instance.speakCalmly(
+                      'استمع جيداً لصوت أول الكلمة: $fullWord',
+                      rate: 0.34,
+                    );
+                  }
+                },
+                child: Text(
+                  letter,
+                  style: const TextStyle(
+                      fontSize: 24, fontWeight: FontWeight.bold),
+                ),
+              );
+            }).toList(),
+          ),
+          if (_wordFeedback != null) ...[
+            const SizedBox(height: 12),
+            Text(
+              _wordFeedback!,
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                  fontWeight: FontWeight.bold, color: Color(0xFFA855F7)),
+            ),
+          ],
+          const SizedBox(height: 16),
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton.icon(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFFA855F7),
+                foregroundColor: Colors.white,
+              ),
+              onPressed: () {
+                setState(() {
+                  _wordQuestionIndex++;
+                  _wordCorrect = false;
+                  _wordFeedback = null;
+                });
+              },
+              icon: const Icon(Icons.navigate_next),
+              label: const Text(
+                'الكلمة العربية التالية',
+                style: TextStyle(fontWeight: FontWeight.bold),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildOddOneOutGame() {
+    final q =
+        _oddOneOutQuestions[_oddQuestionIndex % _oddOneOutQuestions.length];
+    final String title = q['title'] as String;
+    final List<String> items = List<String>.from(q['items'] as List);
+    final String odd = q['odd'] as String;
+    final String explanation = q['explanation'] as String;
+
+    return Container(
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1E293B),
+        borderRadius: BorderRadius.circular(22),
+        border: Border.all(color: const Color(0xFFEC4899).withOpacity(0.5)),
+      ),
+      child: Column(
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Expanded(
+                child: Text(
+                  '🔍 قوة الملاحظة والتصنيف الذكي',
+                  style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold),
+                ),
+              ),
+              IconButton(
+                onPressed: () => CalmVoiceService.instance.speakCalmly(title),
+                icon: const Icon(Icons.volume_up_rounded,
+                    color: Color(0xFFEC4899)),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text(
+            title,
+            textAlign: TextAlign.center,
+            style: const TextStyle(fontSize: 14, color: Colors.white70),
+          ),
+          const SizedBox(height: 18),
+          Wrap(
+            spacing: 14,
+            runSpacing: 14,
+            alignment: WrapAlignment.center,
+            children: items.map((itemEmoji) {
+              return GestureDetector(
+                onTap: () async {
+                  if (itemEmoji == odd) {
+                    setState(() {
+                      _oddCorrect = true;
+                      _oddFeedback = '✅ ملاحظة ذكية جداً! $explanation';
+                    });
+                    await widget.appState.recordBrainGameWin(
+                      gameId: 'odd_one_out',
+                      gameTitle: 'قوة الملاحظة والتصنيف الذكي',
+                      earnedIqPoints: 15,
+                      earnedStars: 1,
+                    );
+                    CalmVoiceService.instance.speakCalmly(
+                      'أحسنت الملاحظة! $explanation',
+                    );
+                  } else {
+                    setState(() {
+                      _oddCorrect = false;
+                      _oddFeedback =
+                          '👀 هذا العنصر يشبه أصدقاءه في المجموعة، ابحث عن العنصر المختلف تماماً!';
+                    });
+                    CalmVoiceService.instance.speakCalmly(
+                      'انظر بدقة يا بطل وابحث عن الشكل المختلف عن المجموعة.',
+                    );
+                  }
+                },
+                child: Container(
+                  width: 78,
+                  height: 78,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF0F172A),
+                    borderRadius: BorderRadius.circular(18),
+                    border: Border.all(color: Colors.white24, width: 1.5),
+                  ),
+                  child: Center(
+                    child:
+                        Text(itemEmoji, style: const TextStyle(fontSize: 38)),
+                  ),
+                ),
+              );
+            }).toList(),
+          ),
+          if (_oddFeedback != null) ...[
+            const SizedBox(height: 14),
+            Text(
+              _oddFeedback!,
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontWeight: FontWeight.bold,
+                color: _oddCorrect
+                    ? const Color(0xFF14B8A6)
+                    : const Color(0xFFF59E0B),
+              ),
+            ),
+          ],
+          const SizedBox(height: 16),
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton.icon(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFFEC4899),
+                foregroundColor: Colors.white,
+              ),
+              onPressed: () {
+                setState(() {
+                  _oddQuestionIndex++;
+                  _oddCorrect = false;
+                  _oddFeedback = null;
+                });
+              },
+              icon: const Icon(Icons.navigate_next),
+              label: const Text(
+                'تحدي الملاحظة التالي',
+                style: TextStyle(fontWeight: FontWeight.bold),
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
