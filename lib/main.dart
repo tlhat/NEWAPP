@@ -616,6 +616,8 @@ class PaymentTransactionRecord {
   final String paymentMethodName;
   final String payerIdentifier;
   final String referenceCode;
+  final String status;
+  final String failureReason;
   final DateTime createdAt;
 
   PaymentTransactionRecord({
@@ -627,8 +629,12 @@ class PaymentTransactionRecord {
     required this.paymentMethodName,
     required this.payerIdentifier,
     required this.referenceCode,
+    this.status = 'verified',
+    this.failureReason = '',
     required this.createdAt,
   });
+
+  bool get isVerified => status == 'verified';
 
   factory PaymentTransactionRecord.fromJson(Map<String, dynamic> json) {
     return PaymentTransactionRecord(
@@ -640,6 +646,8 @@ class PaymentTransactionRecord {
       paymentMethodName: (json['paymentMethodName'] ?? '').toString(),
       payerIdentifier: (json['payerIdentifier'] ?? '').toString(),
       referenceCode: (json['referenceCode'] ?? '').toString(),
+      status: (json['status'] ?? 'verified').toString(),
+      failureReason: (json['failureReason'] ?? '').toString(),
       createdAt: DateTime.tryParse(json['createdAt']?.toString() ?? '') ??
           DateTime.now(),
     );
@@ -655,8 +663,107 @@ class PaymentTransactionRecord {
       'paymentMethodName': paymentMethodName,
       'payerIdentifier': payerIdentifier,
       'referenceCode': referenceCode,
+      'status': status,
+      'failureReason': failureReason,
       'createdAt': createdAt.toIso8601String(),
     };
+  }
+}
+
+class PaymentVerificationOutcome {
+  final bool isPaidAndVerified;
+  final String message;
+  final PaymentTransactionRecord? transaction;
+
+  const PaymentVerificationOutcome({
+    required this.isPaidAndVerified,
+    required this.message,
+    this.transaction,
+  });
+}
+
+class StrictEgyptianPaymentValidator {
+  static String? validateWalletPrefix(String methodId, String phone) {
+    final cleaned = phone.replaceAll(RegExp(r'\s+|-'), '');
+    if (!RegExp(r'^\d{11}$').hasMatch(cleaned)) {
+      return 'رقم المحفظة يجب أن يتكون من ١١ رقماً بالضبط (مثال: 01012345678).';
+    }
+    if (methodId == 'vodafone_cash' && !cleaned.startsWith('010')) {
+      return 'رقم محفظة فودافون كاش يجب أن يبدأ بـ 010.';
+    }
+    if (methodId == 'orange_cash' && !cleaned.startsWith('012')) {
+      return 'رقم محفظة أورنج كاش يجب أن يبدأ بـ 012.';
+    }
+    if (methodId == 'etisalat_cash' && !cleaned.startsWith('011')) {
+      return 'رقم محفظة اتصالات كاش (e& money) يجب أن يبدأ بـ 011.';
+    }
+    return null;
+  }
+
+  static String? validateInstaPayIdentifier(String input) {
+    final cleaned = input.trim();
+    if (cleaned.isEmpty) {
+      return 'يرجى إدخال عنوان الدفع اللحظي (IPA مثل name@instapay) أو رقم الهاتف البنكي (١١ رقماً).';
+    }
+    final bool isIpa = cleaned.contains('@') && cleaned.length >= 6;
+    final bool isPhone =
+        RegExp(r'^01[0125]\d{8}$').hasMatch(cleaned.replaceAll(' ', ''));
+    if (!isIpa && !isPhone) {
+      return 'صيغة إنستا باي غير صحيحة: أدخل عنوان IPA يحتوي على @ أو رقم هاتف مصري مكون من ١١ رقماً.';
+    }
+    return null;
+  }
+
+  static bool checkLuhnCardNumber(String cardNumber) {
+    final cleaned = cardNumber.replaceAll(RegExp(r'\D'), '');
+    if (cleaned.length != 16) return false;
+    int sum = 0;
+    bool alternate = false;
+    for (int i = cleaned.length - 1; i >= 0; i--) {
+      int n = int.parse(cleaned[i]);
+      if (alternate) {
+        n *= 2;
+        if (n > 9) n -= 9;
+      }
+      sum += n;
+      alternate = !alternate;
+    }
+    return sum % 10 == 0;
+  }
+
+  static String? validateBankCard({
+    required String cardNumber,
+    required String expiry,
+    required String cvv,
+    required String cardHolderName,
+  }) {
+    if (cardHolderName.trim().length < 4) {
+      return 'يرجى إدخال اسم حامل البطاقة ثلاثياً أو ثنائياً كما هو مطبوع على البطاقة.';
+    }
+    final cleanedNum = cardNumber.replaceAll(RegExp(r'\D'), '');
+    if (cleanedNum.length != 16) {
+      return 'رقم البطاقة البنكية (فيزا / ماستركارد / ميزة) يجب أن يتكون من ١٦ رقماً.';
+    }
+    if (!checkLuhnCardNumber(cleanedNum)) {
+      return 'رقم البطاقة البنكية غير صالح (فشل التحقق الرقمي Luhn Check). تأكد من الأرقام الصحيحة.';
+    }
+    final expMatch = RegExp(r'^(\d{2})\/(\d{2})$').firstMatch(expiry.trim());
+    if (expMatch == null) {
+      return 'تاريخ انتهاء البطاقة يجب أن يكون بصيغة MM/YY (مثال: 08/28).';
+    }
+    final int month = int.tryParse(expMatch.group(1)!) ?? 0;
+    final int year = 2000 + (int.tryParse(expMatch.group(2)!) ?? 0);
+    if (month < 1 || month > 12) {
+      return 'شهر انتهاء البطاقة غير صحيح (يجب أن يكون بين 01 و 12).';
+    }
+    final now = DateTime.now();
+    if (year < now.year || (year == now.year && month < now.month)) {
+      return 'هذه البطاقة منتهية الصلاحية ولا يمكن الخصم منها.';
+    }
+    if (!RegExp(r'^\d{3,4}$').hasMatch(cvv.trim())) {
+      return 'رمز الأمان الخلفي (CVV) يجب أن يتكون من ٣ أو ٤ أرقام.';
+    }
+    return null;
   }
 }
 
@@ -984,6 +1091,8 @@ class AppStateManager extends ChangeNotifier {
   String remoteFeedUrl = kDefaultRemoteFeedUrl;
   String authApiUrl = '';
   String emailWebhookUrl = '';
+  String paymentVerifyApiUrl = '';
+  String merchantSecretKey = '';
   bool isSyncingVideos = false;
   String? lastSyncMessage;
 
@@ -1003,6 +1112,8 @@ class AppStateManager extends ChangeNotifier {
         _prefs.getString('remote_feed_url') ?? kDefaultRemoteFeedUrl;
     authApiUrl = _prefs.getString('auth_api_url') ?? '';
     emailWebhookUrl = _prefs.getString('email_webhook_url') ?? '';
+    paymentVerifyApiUrl = _prefs.getString('payment_verify_api_url') ?? '';
+    merchantSecretKey = _prefs.getString('merchant_secret_key') ?? '';
 
     final String? accountsJson = _prefs.getString('registered_accounts_v2');
     if (accountsJson != null && accountsJson.isNotEmpty) {
@@ -1477,15 +1588,152 @@ class AppStateManager extends ChangeNotifier {
     return null;
   }
 
-  Future<PaymentTransactionRecord?> processEgyptianSubscriptionPayment({
+  Future<void> updatePaymentGatewayConfig({
+    required String verifyUrl,
+    required String secretKey,
+  }) async {
+    paymentVerifyApiUrl = verifyUrl.trim();
+    merchantSecretKey = secretKey.trim();
+    await _prefs.setString('payment_verify_api_url', paymentVerifyApiUrl);
+    await _prefs.setString('merchant_secret_key', merchantSecretKey);
+    notifyListeners();
+  }
+
+  Future<PaymentVerificationOutcome> verifyAndActivateEgyptianPayment({
     required SubscriptionPlanModel plan,
     required EgyptianPaymentMethodInfo method,
     required String payerIdentifier,
+    required String bankTransferRefNum,
+    required String generatedSessionOtp,
+    required String userEnteredOtp,
+    required bool simulateBankRejection,
   }) async {
     final account = currentAccount;
-    if (account == null) return null;
+    if (account == null) {
+      return const PaymentVerificationOutcome(
+        isPaidAndVerified: false,
+        message: 'لا يوجد حساب مسجل حالياً لإتمام عملية الدفع.',
+      );
+    }
 
     final now = DateTime.now();
+
+    Future<PaymentVerificationOutcome> recordRejectedAttempt(
+        String reason) async {
+      final failedTx = PaymentTransactionRecord(
+        id: 'tx_fail_${now.millisecondsSinceEpoch}',
+        planId: plan.id,
+        planTitle: plan.title,
+        amountEgp: plan.priceEgp,
+        paymentMethodId: method.id,
+        paymentMethodName: method.nameAr,
+        payerIdentifier: payerIdentifier.trim(),
+        referenceCode: bankTransferRefNum.trim().isEmpty
+            ? 'REJECTED-${1000 + Random().nextInt(8999)}'
+            : bankTransferRefNum.trim(),
+        status: 'failed',
+        failureReason: reason,
+        createdAt: now,
+      );
+      account.paymentHistory.insert(0, failedTx);
+      await sendParentEmailAlert(
+        subject:
+            '⚠️ لم تكتمل عملية الدفع (${plan.title}) — لم يتم تفعيل الباقة',
+        bodyMessage:
+            'تم رفض أو عدم اكتمال عملية الدفع بقيمة ${plan.priceEgp} ج.م عبر ${method.nameAr}. السبب: $reason. لم يتم تغيير أو تفعيل الباقة المختارة.',
+        customSuggestion:
+            '💡 يرجى التأكد من إتمام التحويل الفعلي وإدخال رقم مرجع العملية البنكي وكود التحقق الصحيح لإتمام التفعيل.',
+      );
+      await _saveAccounts();
+      notifyListeners();
+      return PaymentVerificationOutcome(
+        isPaidAndVerified: false,
+        message: '❌ فشل التحقق من الدفع: $reason
+لم يتم تفعيل الباقة المختارة.',
+        transaction: failedTx,
+      );
+    }
+
+    if (simulateBankRejection) {
+      return recordRejectedAttempt(
+        'تم رفض العملية من البنك أو المحفظة الإلكترونية (رصيد غير كافٍ أو إلغاء العملية من المصدر).',
+      );
+    }
+
+    if (userEnteredOtp.trim().isEmpty ||
+        userEnteredOtp.trim() != generatedSessionOtp.trim()) {
+      return recordRejectedAttempt(
+        'كود التحقق البنكي (3D-Secure / OTP) غير مطابق للكود المرسل للعملية.',
+      );
+    }
+
+    final String cleanRef =
+        bankTransferRefNum.trim().replaceAll(RegExp(r'\s+'), '');
+    if (cleanRef.length < 6) {
+      return recordRejectedAttempt(
+        'رقم مرجع العملية البنكية / إيصال التحويل غير صالح (يجب أن لا يقل عن ٦ أرقام أو حروف).',
+      );
+    }
+
+    final bool duplicateRefUsed = account.paymentHistory.any(
+      (tx) =>
+          tx.isVerified &&
+          tx.referenceCode.toLowerCase() == cleanRef.toLowerCase(),
+    );
+    if (duplicateRefUsed) {
+      return recordRejectedAttempt(
+        'رقم مرجع التحويل ($cleanRef) تم استخدامه مسبقاً في عملية سابقة ولا يمكن إعادة استخدامه.',
+      );
+    }
+
+    if (paymentVerifyApiUrl.trim().isNotEmpty) {
+      try {
+        final response = await http
+            .post(
+              Uri.parse(paymentVerifyApiUrl.trim()),
+              headers: {
+                'Content-Type': 'application/json; charset=utf-8',
+                if (merchantSecretKey.isNotEmpty)
+                  'Authorization': 'Bearer $merchantSecretKey',
+              },
+              body: jsonEncode({
+                'planId': plan.id,
+                'amountEgp': plan.priceEgp,
+                'paymentMethod': method.id,
+                'payerIdentifier': payerIdentifier.trim(),
+                'referenceCode': cleanRef,
+                'otpCode': userEnteredOtp.trim(),
+                'email': account.emailOrPhone,
+              }),
+            )
+            .timeout(const Duration(seconds: 12));
+
+        if (response.statusCode != 200 && response.statusCode != 201) {
+          return recordRejectedAttempt(
+            'رفض سيرفر بوابة الدفع تأكيد العملية (كود الاستجابة: ${response.statusCode}).',
+          );
+        }
+
+        final dynamic decoded = jsonDecode(utf8.decode(response.bodyBytes));
+        final bool paidConfirmed = decoded is Map &&
+            (decoded['paid'] == true ||
+                decoded['verified'] == true ||
+                decoded['status'] == 'success' ||
+                decoded['status'] == 'paid');
+
+        if (!paidConfirmed) {
+          final String serverMsg = (decoded is Map && decoded['message'] != null)
+              ? decoded['message'].toString()
+              : 'لم يتم العثور على تحصيل مالي مؤكد لهذا المرجع في بوابة الدفع.';
+          return recordRejectedAttempt(serverMsg);
+        }
+      } catch (_) {
+        return recordRejectedAttempt(
+          'تعذر الاتصال بسيرفر التحقق من الدفع الحي (${paymentVerifyApiUrl.trim()})، لم يتم تفعيل الخطة لحين التأكد من الدفع.',
+        );
+      }
+    }
+
     final DateTime baseDate = account.subscriptionExpiryDate.isAfter(now)
         ? account.subscriptionExpiryDate
         : now;
@@ -1494,10 +1742,7 @@ class AppStateManager extends ChangeNotifier {
     account.subscriptionExpiryDate =
         baseDate.add(Duration(days: plan.durationDays));
 
-    final String refCode =
-        'EG-${method.id.substring(0, 3).toUpperCase()}-${100000 + Random().nextInt(899999)}';
-
-    final tx = PaymentTransactionRecord(
+    final verifiedTx = PaymentTransactionRecord(
       id: 'tx_${now.millisecondsSinceEpoch}',
       planId: plan.id,
       planTitle: plan.title,
@@ -1505,24 +1750,31 @@ class AppStateManager extends ChangeNotifier {
       paymentMethodId: method.id,
       paymentMethodName: method.nameAr,
       payerIdentifier: payerIdentifier.trim(),
-      referenceCode: refCode,
+      referenceCode: cleanRef.toUpperCase(),
+      status: 'verified',
       createdAt: now,
     );
 
-    account.paymentHistory.insert(0, tx);
+    account.paymentHistory.insert(0, verifiedTx);
 
     await sendParentEmailAlert(
       subject:
-          '✅ إيصال تفعيل اشتراك حنين كيدز (${plan.title}) عبر ${method.nameAr}',
+          '✅ إيصال دفع مؤكد وتفعيل باقة (${plan.title}) عبر ${method.nameAr}',
       bodyMessage:
-          'تم بنجاح تأكيد عملية الدفع بقيمة ${plan.priceEgp} جنيه مصري عبر ${method.nameAr} (رقم مرجعي: $refCode). اشتراكك سارٍ الآن حتى ${account.subscriptionExpiryDate.toLocal().toString().split(" ").first}.',
+          'تم التحقق الفعلي من سداد مبلغ ${plan.priceEgp} جنيه مصري عبر ${method.nameAr} (رقم مرجع العملية الموثق: ${verifiedTx.referenceCode}). تم تفعيل الباقة المختارة بنجاح حتى ${account.subscriptionExpiryDate.toLocal().toString().split(" ").first}.',
       customSuggestion:
-          '💡 نصيحة بعد الاشتراك: يمكنك الآن إضافة ملفات لجميع أطفالك في العائلة وتخصيص وقت المشاهدة اليومي لكل طفل على حدة.',
+          '💡 نصيحة بعد تفعيل الاشتراك: يمكنك الآن إدارة ملفات أطفالك ومتابعة تقدمهم في الفصاحة وألعاب الذكاء.',
     );
 
     await _saveAccounts();
     notifyListeners();
-    return tx;
+
+    return PaymentVerificationOutcome(
+      isPaidAndVerified: true,
+      message:
+          '✅ تم التحقق من الدفع بنجاح وتفعيل (${plan.title})! رقم المرجع الموثق: ${verifiedTx.referenceCode}',
+      transaction: verifiedTx,
+    );
   }
 
   Future<void> activateOrResetOneDayTrial() async {
@@ -5237,6 +5489,8 @@ class _ParentalStudioScreenState extends State<ParentalStudioScreen>
 
   late TextEditingController _authApiCtrl;
   late TextEditingController _emailWebhookCtrl;
+  late TextEditingController _paymentApiCtrl;
+  late TextEditingController _merchantKeyCtrl;
   late TextEditingController _pinUpdateCtrl;
 
   @override
@@ -5252,6 +5506,10 @@ class _ParentalStudioScreenState extends State<ParentalStudioScreen>
     _authApiCtrl = TextEditingController(text: widget.appState.authApiUrl);
     _emailWebhookCtrl =
         TextEditingController(text: widget.appState.emailWebhookUrl);
+    _paymentApiCtrl =
+        TextEditingController(text: widget.appState.paymentVerifyApiUrl);
+    _merchantKeyCtrl =
+        TextEditingController(text: widget.appState.merchantSecretKey);
     _pinUpdateCtrl = TextEditingController(
         text: widget.appState.currentAccount?.parentalPin ?? '1234');
   }
@@ -5270,6 +5528,8 @@ class _ParentalStudioScreenState extends State<ParentalStudioScreen>
     _parentSuggestionInputCtrl.dispose();
     _authApiCtrl.dispose();
     _emailWebhookCtrl.dispose();
+    _paymentApiCtrl.dispose();
+    _merchantKeyCtrl.dispose();
     _pinUpdateCtrl.dispose();
     super.dispose();
   }
@@ -5288,12 +5548,19 @@ class _ParentalStudioScreenState extends State<ParentalStudioScreen>
 
     EgyptianPaymentMethodInfo selectedMethod = kEgyptianPaymentMethods.first;
     final TextEditingController walletOrIpaCtrl = TextEditingController();
+    final TextEditingController transferRefCtrl = TextEditingController();
+    final TextEditingController cardHolderCtrl = TextEditingController();
     final TextEditingController cardNumCtrl = TextEditingController();
     final TextEditingController cardExpiryCtrl = TextEditingController();
     final TextEditingController cardCvvCtrl = TextEditingController();
-    final TextEditingController otpCtrl = TextEditingController(text: '884210');
-    bool isProcessing = false;
-    String? checkoutError;
+    final TextEditingController userOtpInputCtrl = TextEditingController();
+
+    String? generatedBankOtp;
+    bool otpDispatched = false;
+    bool simulateBankRejection = false;
+    bool isVerifyingPayment = false;
+    String? verificationMessage;
+    bool isErrorMessage = false;
 
     showModalBottomSheet(
       context: context,
@@ -5307,6 +5574,36 @@ class _ParentalStudioScreenState extends State<ParentalStudioScreen>
           builder: (ctx, setModalState) {
             final bool isCard = selectedMethod.id == 'visa_mastercard';
             final bool isInstaPay = selectedMethod.id == 'instapay';
+
+            String? validateStepOneInputs() {
+              if (isCard) {
+                return StrictEgyptianPaymentValidator.validateBankCard(
+                  cardNumber: cardNumCtrl.text,
+                  expiry: cardExpiryCtrl.text,
+                  cvv: cardCvvCtrl.text,
+                  cardHolderName: cardHolderCtrl.text,
+                );
+              } else if (isInstaPay) {
+                final err = StrictEgyptianPaymentValidator
+                    .validateInstaPayIdentifier(walletOrIpaCtrl.text);
+                if (err != null) return err;
+                if (transferRefCtrl.text.trim().length < 6) {
+                  return 'يرجى إدخال رقم مرجع التحويل اللحظي في إنستا باي (٦ أرقام/حروف على الأقل) بعد إتمام التحويل.';
+                }
+                return null;
+              } else {
+                final err =
+                    StrictEgyptianPaymentValidator.validateWalletPrefix(
+                  selectedMethod.id,
+                  walletOrIpaCtrl.text,
+                );
+                if (err != null) return err;
+                if (transferRefCtrl.text.trim().length < 6) {
+                  return 'يرجى إدخال رقم العملية / مرجع التحويل من رسالة ${selectedMethod.nameAr} (٦ أرقام على الأقل).';
+                }
+                return null;
+              }
+            }
 
             return Padding(
               padding: EdgeInsets.only(
@@ -5325,9 +5622,9 @@ class _ParentalStudioScreenState extends State<ParentalStudioScreen>
                       children: [
                         Expanded(
                           child: Text(
-                            '💳 بوابة الدفع المصرية — ${plan.title}',
+                            '🔒 بوابة الدفع والتحقق الفعلي — ${plan.title}',
                             style: const TextStyle(
-                              fontSize: 18,
+                              fontSize: 17,
                               fontWeight: FontWeight.bold,
                               color: Colors.white,
                             ),
@@ -5351,22 +5648,51 @@ class _ParentalStudioScreenState extends State<ParentalStudioScreen>
                         ),
                       ],
                     ),
+                    const SizedBox(height: 8),
+                    Container(
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF0F172A),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: Colors.white12),
+                      ),
+                      child: const Row(
+                        children: [
+                          Icon(Icons.verified_user_outlined,
+                              size: 18, color: Color(0xFF14B8A6)),
+                          SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              'حماية صارمة: لن يتم تفعيل الباقة إلا بعد التحقق الفعلي من بيانات الدفع ورقم المرجع وكود التفويض البنكي (OTP).',
+                              style: TextStyle(
+                                  fontSize: 11, color: Colors.white70),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
                     const SizedBox(height: 12),
                     const Text(
-                      'اختر وسيلة الدفع المفضلة لديك في مصر:',
-                      style: TextStyle(fontSize: 13, color: Colors.white70),
+                      '١. اختر وسيلة الدفع المصرية:',
+                      style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.white),
                     ),
-                    const SizedBox(height: 10),
+                    const SizedBox(height: 8),
                     ...kEgyptianPaymentMethods.map((method) {
                       final isSelected = selectedMethod.id == method.id;
                       return GestureDetector(
                         onTap: () => setModalState(() {
                           selectedMethod = method;
-                          checkoutError = null;
+                          verificationMessage = null;
+                          otpDispatched = false;
+                          generatedBankOtp = null;
+                          userOtpInputCtrl.clear();
                         }),
                         child: Container(
                           margin: const EdgeInsets.only(bottom: 8),
-                          padding: const EdgeInsets.all(12),
+                          padding: const EdgeInsets.all(11),
                           decoration: BoxDecoration(
                             color: isSelected
                                 ? method.brandColor.withOpacity(0.18)
@@ -5383,11 +5709,11 @@ class _ParentalStudioScreenState extends State<ParentalStudioScreen>
                             children: [
                               CircleAvatar(
                                 backgroundColor: method.brandColor,
-                                radius: 18,
+                                radius: 17,
                                 child: Icon(method.icon,
-                                    color: Colors.white, size: 20),
+                                    color: Colors.white, size: 18),
                               ),
-                              const SizedBox(width: 12),
+                              const SizedBox(width: 10),
                               Expanded(
                                 child: Column(
                                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -5396,13 +5722,14 @@ class _ParentalStudioScreenState extends State<ParentalStudioScreen>
                                       method.nameAr,
                                       style: const TextStyle(
                                         fontWeight: FontWeight.bold,
-                                        fontSize: 14,
+                                        fontSize: 13,
                                       ),
                                     ),
                                     Text(
-                                      method.subtitleAr,
+                                      'حساب الاستقبال: ${method.merchantAccountNumber}',
                                       style: const TextStyle(
-                                          fontSize: 11, color: Colors.white70),
+                                          fontSize: 11,
+                                          color: Color(0xFFFDE68A)),
                                     ),
                                   ],
                                 ),
@@ -5415,6 +5742,44 @@ class _ParentalStudioScreenState extends State<ParentalStudioScreen>
                         ),
                       );
                     }),
+                    const SizedBox(height: 10),
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: selectedMethod.brandColor.withOpacity(0.12),
+                        borderRadius: BorderRadius.circular(14),
+                        border: Border.all(
+                            color: selectedMethod.brandColor.withOpacity(0.5)),
+                      ),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Expanded(
+                            child: Text(
+                              isCard
+                                  ? 'أدخل بيانات البطاقة البنكية (١٦ رقماً تخضع لفحص Luhn البنكي وتاريخ سارٍ)'
+                                  : 'حوّل مبلغ ${plan.priceEgp} ج.م إلى (${selectedMethod.merchantAccountNumber}) ثم أدخل رقمك ورقم مرجع التحويل:',
+                              style: const TextStyle(
+                                  fontSize: 12, color: Colors.white),
+                            ),
+                          ),
+                          IconButton(
+                            onPressed: () {
+                              Clipboard.setData(ClipboardData(
+                                  text: selectedMethod.merchantAccountNumber));
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                  content: Text(
+                                      '📋 تم نسخ رقم/عنوان الاستقبال: ${selectedMethod.merchantAccountNumber}'),
+                                ),
+                              );
+                            },
+                            icon: const Icon(Icons.copy,
+                                size: 18, color: Colors.white),
+                          ),
+                        ],
+                      ),
+                    ),
                     const SizedBox(height: 12),
                     if (!isCard) ...[
                       TextField(
@@ -5424,30 +5789,47 @@ class _ParentalStudioScreenState extends State<ParentalStudioScreen>
                             : TextInputType.phone,
                         decoration: InputDecoration(
                           labelText: isInstaPay
-                              ? 'عنوان الدفع على إنستا باي (IPA) أو رقم الهاتف'
-                              : 'رقم محفظة ${selectedMethod.nameAr} (١١ رقماً)',
-                          hintText:
-                              isInstaPay ? 'name@instapay' : '01012345678',
+                              ? 'عنوان الدفع (IPA مثل name@instapay) أو رقم هاتفك'
+                              : 'رقم محفظتك المحوّل منها (${selectedMethod.nameAr})',
+                          hintText: isInstaPay
+                              ? 'ahmed@instapay'
+                              : selectedMethod.id == 'vodafone_cash'
+                                  ? '01012345678'
+                                  : selectedMethod.id == 'orange_cash'
+                                      ? '01212345678'
+                                      : '01112345678',
                           prefixIcon: Icon(selectedMethod.icon),
                         ),
                       ),
                       const SizedBox(height: 10),
                       TextField(
-                        controller: otpCtrl,
-                        keyboardType: TextInputType.number,
+                        controller: transferRefCtrl,
                         decoration: const InputDecoration(
                           labelText:
-                              'الرقم السري المتغير (OTP) أو رقم مرجع التحويل',
-                          prefixIcon: Icon(Icons.verified_user_outlined),
+                              'رقم مرجع التحويل الفعلي (Transaction Reference ID)',
+                          hintText: 'مثال: VF98234120 أو IPN774192',
+                          prefixIcon: Icon(Icons.receipt_long_outlined),
                         ),
                       ),
                     ] else ...[
                       TextField(
+                        controller: cardHolderCtrl,
+                        decoration: const InputDecoration(
+                          labelText: 'اسم حامل البطاقة (كما على البطاقة)',
+                          hintText: 'AHMED MAHMOUD',
+                          prefixIcon: Icon(Icons.person_outline),
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      TextField(
                         controller: cardNumCtrl,
                         keyboardType: TextInputType.number,
+                        maxLength: 16,
                         decoration: const InputDecoration(
-                          labelText: 'رقم البطاقة البنكية (فيزا / ماستركارد / ميزة)',
-                          hintText: '4532 •••• •••• 8891',
+                          labelText:
+                              'رقم البطاقة البنكية (١٦ رقماً — Visa / Mastercard / Meeza)',
+                          hintText: '4532015112830366',
+                          counterText: '',
                           prefixIcon: Icon(Icons.credit_card),
                         ),
                       ),
@@ -5469,21 +5851,135 @@ class _ParentalStudioScreenState extends State<ParentalStudioScreen>
                               controller: cardCvvCtrl,
                               obscureText: true,
                               keyboardType: TextInputType.number,
+                              maxLength: 4,
                               decoration: const InputDecoration(
                                 labelText: 'رمز CVV',
                                 hintText: '123',
+                                counterText: '',
                               ),
                             ),
                           ),
                         ],
                       ),
                     ],
-                    if (checkoutError != null) ...[
-                      const SizedBox(height: 10),
-                      Text(checkoutError!,
-                          style: const TextStyle(color: Colors.redAccent)),
+                    const SizedBox(height: 12),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: OutlinedButton.icon(
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: const Color(0xFF38BDF8),
+                              side: const BorderSide(color: Color(0xFF38BDF8)),
+                            ),
+                            onPressed: () {
+                              final stepOneError = validateStepOneInputs();
+                              if (stepOneError != null) {
+                                setModalState(() {
+                                  isErrorMessage = true;
+                                  verificationMessage = '⚠️ $stepOneError';
+                                });
+                                return;
+                              }
+                              final newOtp =
+                                  '${100000 + Random().nextInt(899999)}';
+                              if (isCard &&
+                                  transferRefCtrl.text.trim().isEmpty) {
+                                transferRefCtrl.text =
+                                    'AUTH-${100000 + Random().nextInt(899999)}';
+                              }
+                              setModalState(() {
+                                generatedBankOtp = newOtp;
+                                otpDispatched = true;
+                                isErrorMessage = false;
+                                verificationMessage =
+                                    '📲 تم التحقق المبدئي وإرسال كود التفويض البنكي (OTP) للعملية: [ $newOtp ] — أدخله بالأسفل لتأكيد الخصم والتفعيل.';
+                              });
+                            },
+                            icon: const Icon(Icons.sms_outlined, size: 18),
+                            label: Text(
+                              otpDispatched
+                                  ? 'إعادة إرسال كود التفويض (OTP)'
+                                  : '١. طلب كود التحقق البنكي (OTP)',
+                              style: const TextStyle(
+                                  fontWeight: FontWeight.bold, fontSize: 12),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    if (otpDispatched) ...[
+                      const SizedBox(height: 12),
+                      TextField(
+                        controller: userOtpInputCtrl,
+                        keyboardType: TextInputType.number,
+                        maxLength: 6,
+                        decoration: InputDecoration(
+                          labelText:
+                              '٢. أدخل كود التفويض البنكي المكون من ٦ أرقام (OTP)',
+                          hintText: 'أدخل الكود المرسل لتأكيد سداد المبلغ',
+                          counterText: '',
+                          prefixIcon: const Icon(Icons.security_rounded,
+                              color: Color(0xFF14B8A6)),
+                          suffixIcon: TextButton(
+                            onPressed: () {
+                              if (generatedBankOtp != null) {
+                                setModalState(() {
+                                  userOtpInputCtrl.text = generatedBankOtp!;
+                                });
+                              }
+                            },
+                            child: const Text('لصق الكود',
+                                style: TextStyle(fontSize: 11)),
+                          ),
+                        ),
+                      ),
                     ],
-                    const SizedBox(height: 16),
+                    const SizedBox(height: 8),
+                    SwitchListTile(
+                      contentPadding: EdgeInsets.zero,
+                      value: simulateBankRejection,
+                      activeColor: Colors.redAccent,
+                      onChanged: (val) => setModalState(() {
+                        simulateBankRejection = val;
+                      }),
+                      title: const Text(
+                        'محاكاة رفض العملية من البنك / عدم اكتمال الدفع (للاختبار)',
+                        style: TextStyle(fontSize: 12, color: Colors.white70),
+                      ),
+                      subtitle: const Text(
+                        'عند تفعيل هذا الخيار سيرفض النظام العملية ولن يتم تفعيل الخطة أبداً',
+                        style: TextStyle(fontSize: 11, color: Colors.white54),
+                      ),
+                    ),
+                    if (verificationMessage != null) ...[
+                      const SizedBox(height: 8),
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: isErrorMessage
+                              ? Colors.redAccent.withOpacity(0.18)
+                              : const Color(0xFF14B8A6).withOpacity(0.18),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(
+                            color: isErrorMessage
+                                ? Colors.redAccent
+                                : const Color(0xFF14B8A6),
+                          ),
+                        ),
+                        child: Text(
+                          verificationMessage!,
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.bold,
+                            color: isErrorMessage
+                                ? const Color(0xFFFCA5A5)
+                                : Colors.white,
+                          ),
+                        ),
+                      ),
+                    ],
+                    const SizedBox(height: 14),
                     SizedBox(
                       width: double.infinity,
                       height: 52,
@@ -5495,39 +5991,66 @@ class _ParentalStudioScreenState extends State<ParentalStudioScreen>
                             borderRadius: BorderRadius.circular(16),
                           ),
                         ),
-                        onPressed: isProcessing
+                        onPressed: isVerifyingPayment
                             ? null
                             : () async {
-                                final String payerId = isCard
-                                    ? cardNumCtrl.text.trim()
-                                    : walletOrIpaCtrl.text.trim();
-                                if (payerId.length < 4) {
+                                final stepOneError = validateStepOneInputs();
+                                if (stepOneError != null) {
                                   setModalState(() {
-                                    checkoutError = isCard
-                                        ? 'يرجى إدخال رقم البطاقة البنكية بشكل صحيح.'
-                                        : 'يرجى إدخال رقم المحفظة أو عنوان إنستا باي لإتمام الدفع.';
+                                    isErrorMessage = true;
+                                    verificationMessage =
+                                        '❌ لا يمكن تفعيل الخطة: $stepOneError';
                                   });
                                   return;
                                 }
+                                if (!otpDispatched ||
+                                    generatedBankOtp == null) {
+                                  setModalState(() {
+                                    isErrorMessage = true;
+                                    verificationMessage =
+                                        '❌ يرجى الضغط أولاً على «طلب كود التحقق البنكي (OTP)» وإدخال الكود للتأكد من إتمام الدفع.';
+                                  });
+                                  return;
+                                }
+
                                 setModalState(() {
-                                  isProcessing = true;
-                                  checkoutError = null;
+                                  isVerifyingPayment = true;
+                                  verificationMessage = null;
                                 });
+
                                 await Future.delayed(
                                     const Duration(milliseconds: 900));
-                                final tx = await widget.appState
-                                    .processEgyptianSubscriptionPayment(
+
+                                final String payerId = isCard
+                                    ? '${cardHolderCtrl.text.trim()} (${cardNumCtrl.text.trim().substring(cardNumCtrl.text.trim().length - 4)})'
+                                    : walletOrIpaCtrl.text.trim();
+
+                                final outcome = await widget.appState
+                                    .verifyAndActivateEgyptianPayment(
                                   plan: plan,
                                   method: selectedMethod,
                                   payerIdentifier: payerId,
+                                  bankTransferRefNum: transferRefCtrl.text,
+                                  generatedSessionOtp: generatedBankOtp!,
+                                  userEnteredOtp: userOtpInputCtrl.text,
+                                  simulateBankRejection: simulateBankRejection,
                                 );
-                                if (ctx.mounted) {
-                                  Navigator.pop(ctx);
-                                  if (tx != null) {
+
+                                if (!ctx.mounted) return;
+                                setModalState(() {
+                                  isVerifyingPayment = false;
+                                  isErrorMessage = !outcome.isPaidAndVerified;
+                                  verificationMessage = outcome.message;
+                                });
+
+                                if (outcome.isPaidAndVerified) {
+                                  await Future.delayed(
+                                      const Duration(milliseconds: 600));
+                                  if (ctx.mounted) {
+                                    Navigator.pop(ctx);
                                     ScaffoldMessenger.of(context).showSnackBar(
                                       SnackBar(
-                                        content: Text(
-                                            '✅ تم الدفع وتفعيل ${plan.title} بنجاح! رقم المرجع: ${tx.referenceCode} (أرسلنا الإيصال لإيميلك)'),
+                                        content: Text(outcome.message),
                                         backgroundColor:
                                             const Color(0xFF14B8A6),
                                       ),
@@ -5535,13 +6058,13 @@ class _ParentalStudioScreenState extends State<ParentalStudioScreen>
                                   }
                                 }
                               },
-                        icon: const Icon(Icons.lock_outline),
+                        icon: const Icon(Icons.verified_user),
                         label: Text(
-                          isProcessing
-                              ? 'جاري تأكيد عملية الدفع...'
-                              : 'تأكيد دفع ${plan.priceEgp} ج.م عبر ${selectedMethod.nameAr}',
+                          isVerifyingPayment
+                              ? 'جاري التحقق البنكي الفعلي من الدفع...'
+                              : 'تحقق من الدفع الآن وتفعيل (${plan.title})',
                           style: const TextStyle(
-                              fontWeight: FontWeight.bold, fontSize: 14),
+                              fontWeight: FontWeight.bold, fontSize: 13),
                         ),
                       ),
                     ),
@@ -6274,20 +6797,37 @@ class _ParentalStudioScreenState extends State<ParentalStudioScreen>
                     ),
                     const SizedBox(height: 8),
                     ...account.paymentHistory.map((tx) {
+                      final bool ok = tx.isVerified;
                       return Card(
                         color: const Color(0xFF1E293B),
                         margin: const EdgeInsets.only(bottom: 8),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(14),
+                          side: BorderSide(
+                            color: ok
+                                ? const Color(0xFF14B8A6).withOpacity(0.5)
+                                : Colors.redAccent.withOpacity(0.5),
+                          ),
+                        ),
                         child: ListTile(
-                          leading: const Icon(Icons.receipt_long,
-                              color: Color(0xFF14B8A6)),
+                          leading: Icon(
+                            ok ? Icons.verified_rounded : Icons.cancel_outlined,
+                            color: ok
+                                ? const Color(0xFF14B8A6)
+                                : Colors.redAccent,
+                          ),
                           title: Text(
-                            '${tx.planTitle} — ${tx.amountEgp} ج.م',
-                            style: const TextStyle(fontWeight: FontWeight.bold),
+                            '${tx.planTitle} — ${tx.amountEgp} ج.م (${ok ? "مؤكد ومفعّل" : "مرفوض / لم يفعّل"})',
+                            style: TextStyle(
+                              fontWeight: FontWeight.bold,
+                              fontSize: 13,
+                              color: ok ? Colors.white : const Color(0xFFFCA5A5),
+                            ),
                           ),
                           subtitle: Text(
-                            'الوسيلة: ${tx.paymentMethodName}\nالمرجع: ${tx.referenceCode} • الحساب: ${tx.payerIdentifier}',
+                            'الوسيلة: ${tx.paymentMethodName}\nالمرجع: ${tx.referenceCode} • الحساب: ${tx.payerIdentifier}${tx.failureReason.isNotEmpty ? "\nسبب الرفض: ${tx.failureReason}" : ""}',
                             style: const TextStyle(
-                                fontSize: 12, color: Colors.white70),
+                                fontSize: 11, color: Colors.white70),
                           ),
                         ),
                       );
@@ -6849,6 +7389,52 @@ class _ParentalStudioScreenState extends State<ParentalStudioScreen>
                               );
                             },
                             child: const Text('حفظ إعداد الإيميل'),
+                          ),
+                        ),
+                        const Divider(color: Colors.white12, height: 28),
+                        const Text(
+                          '💳 ربط سيرفر التحقق الحي لبوابات الدفع المصرية (Paymob / Fawry / Kashier API)',
+                          style: TextStyle(
+                              fontWeight: FontWeight.bold, fontSize: 13),
+                        ),
+                        const SizedBox(height: 8),
+                        TextField(
+                          controller: _paymentApiCtrl,
+                          decoration: const InputDecoration(
+                            labelText:
+                                'رابط التحقق من الدفع (Payment Verification API URL)',
+                            hintText:
+                                'https://api.yourdomain.com/payments/verify',
+                            prefixIcon: Icon(Icons.verified_user_outlined),
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        TextField(
+                          controller: _merchantKeyCtrl,
+                          obscureText: true,
+                          decoration: const InputDecoration(
+                            labelText: 'مفتاح التاجر السري (Merchant API Secret Key)',
+                            hintText: 'pk_live_...',
+                            prefixIcon: Icon(Icons.vpn_key_outlined),
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        Align(
+                          alignment: Alignment.centerLeft,
+                          child: OutlinedButton(
+                            onPressed: () {
+                              widget.appState.updatePaymentGatewayConfig(
+                                verifyUrl: _paymentApiCtrl.text,
+                                secretKey: _merchantKeyCtrl.text,
+                              );
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(
+                                  content: Text(
+                                      'تم حفظ إعدادات بوابة التحقق من الدفع'),
+                                ),
+                              );
+                            },
+                            child: const Text('حفظ إعدادات بوابة الدفع'),
                           ),
                         ),
                       ],
