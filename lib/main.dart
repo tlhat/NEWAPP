@@ -30,6 +30,14 @@ class CalmVoiceService {
   bool _ttsReady = false;
   bool _sttReady = false;
   bool isSpeaking = false;
+  bool isAssistantMuted = false;
+
+  Future<void> setAssistantMuted(bool muted) async {
+    isAssistantMuted = muted;
+    if (muted) {
+      await stopSpeaking();
+    }
+  }
 
   Future<void> init() async {
     if (_ttsReady) return;
@@ -53,7 +61,12 @@ class CalmVoiceService {
     }
   }
 
-  Future<void> speakCalmly(String text, {double rate = 0.38}) async {
+  Future<void> speakCalmly(
+    String text, {
+    double rate = 0.38,
+    bool forceSpeakEvenIfAssistantMuted = false,
+  }) async {
+    if (isAssistantMuted && !forceSpeakEvenIfAssistantMuted) return;
     try {
       await init();
       final String cleanText = text
@@ -337,6 +350,35 @@ class VideoModel {
   }
 }
 
+class ChildActivityLogEntry {
+  final String timestampIso;
+  final String actionTitle;
+  final String categoryBadge;
+
+  const ChildActivityLogEntry({
+    required this.timestampIso,
+    required this.actionTitle,
+    required this.categoryBadge,
+  });
+
+  factory ChildActivityLogEntry.fromJson(Map<String, dynamic> json) {
+    return ChildActivityLogEntry(
+      timestampIso: (json['timestampIso'] ?? DateTime.now().toIso8601String())
+          .toString(),
+      actionTitle: (json['actionTitle'] ?? '').toString(),
+      categoryBadge: (json['categoryBadge'] ?? 'نشاط').toString(),
+    );
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'timestampIso': timestampIso,
+      'actionTitle': actionTitle,
+      'categoryBadge': categoryBadge,
+    };
+  }
+}
+
 class ChildProfile {
   final String id;
   String name;
@@ -349,8 +391,13 @@ class ChildProfile {
   int correctPronunciationsCount;
   int intelligencePoints;
   int gamesCompletedCount;
+  bool isDeviceRemotelyLocked;
+  String remoteLockReasonMessage;
+  String currentLiveStatus;
+  String familyPairingCode;
   List<String> completedActivities;
   List<String> likedVideoIds;
+  List<ChildActivityLogEntry> liveActivityTimeline;
 
   ChildProfile({
     required this.id,
@@ -364,10 +411,24 @@ class ChildProfile {
     this.correctPronunciationsCount = 0,
     this.intelligencePoints = 10,
     this.gamesCompletedCount = 0,
+    this.isDeviceRemotelyLocked = false,
+    this.remoteLockReasonMessage =
+        'تم قفل شاشة التطبيق الآن من هاتف ولي الأمر. حان وقت الراحة أو اللعب الواقعي يا بطل!',
+    this.currentLiveStatus = 'متصل — يتصفح قصص حنين الهادئة',
+    this.familyPairingCode = 'HK-8824',
     List<String>? completedActivities,
     List<String>? likedVideoIds,
+    List<ChildActivityLogEntry>? liveActivityTimeline,
   })  : completedActivities = completedActivities ?? [],
-        likedVideoIds = likedVideoIds ?? [];
+        likedVideoIds = likedVideoIds ?? [],
+        liveActivityTimeline = liveActivityTimeline ??
+            [
+              ChildActivityLogEntry(
+                timestampIso: DateTime.now().toIso8601String(),
+                actionTitle: 'بدأ جلسة المشاهدة الهادئة على التطبيق',
+                categoryBadge: 'جلسة مباشرة',
+              ),
+            ];
 
   factory ChildProfile.fromJson(Map<String, dynamic> json) {
     return ChildProfile(
@@ -397,12 +458,25 @@ class ChildProfile {
       gamesCompletedCount: int.tryParse(
               json['gamesCompletedCount']?.toString() ?? '0') ??
           0,
+      isDeviceRemotelyLocked: json['isDeviceRemotelyLocked'] == true,
+      remoteLockReasonMessage: (json['remoteLockReasonMessage'] ??
+              'تم قفل شاشة التطبيق الآن من هاتف ولي الأمر. حان وقت الراحة يا بطل!')
+          .toString(),
+      currentLiveStatus:
+          (json['currentLiveStatus'] ?? 'متصل — يشاهد القصص الهادئة')
+              .toString(),
+      familyPairingCode: (json['familyPairingCode'] ?? 'HK-8824').toString(),
       completedActivities: (json['completedActivities'] as List<dynamic>?)
               ?.map((e) => e.toString())
               .toList() ??
           [],
       likedVideoIds: (json['likedVideoIds'] as List<dynamic>?)
               ?.map((e) => e.toString())
+              .toList() ??
+          [],
+      liveActivityTimeline: (json['liveActivityTimeline'] as List<dynamic>?)
+              ?.map((e) => ChildActivityLogEntry.fromJson(
+                  Map<String, dynamic>.from(e as Map)))
               .toList() ??
           [],
     );
@@ -421,8 +495,14 @@ class ChildProfile {
       'correctPronunciationsCount': correctPronunciationsCount,
       'intelligencePoints': intelligencePoints,
       'gamesCompletedCount': gamesCompletedCount,
+      'isDeviceRemotelyLocked': isDeviceRemotelyLocked,
+      'remoteLockReasonMessage': remoteLockReasonMessage,
+      'currentLiveStatus': currentLiveStatus,
+      'familyPairingCode': familyPairingCode,
       'completedActivities': completedActivities,
       'likedVideoIds': likedVideoIds,
+      'liveActivityTimeline':
+          liveActivityTimeline.map((e) => e.toJson()).toList(),
     };
   }
 }
@@ -1093,6 +1173,7 @@ class AppStateManager extends ChangeNotifier {
   String emailWebhookUrl = '';
   String paymentVerifyApiUrl = '';
   String merchantSecretKey = '';
+  String remoteMonitorApiUrl = '';
   bool isSyncingVideos = false;
   String? lastSyncMessage;
 
@@ -1114,6 +1195,7 @@ class AppStateManager extends ChangeNotifier {
     emailWebhookUrl = _prefs.getString('email_webhook_url') ?? '';
     paymentVerifyApiUrl = _prefs.getString('payment_verify_api_url') ?? '';
     merchantSecretKey = _prefs.getString('merchant_secret_key') ?? '';
+    remoteMonitorApiUrl = _prefs.getString('remote_monitor_api_url') ?? '';
 
     final String? accountsJson = _prefs.getString('registered_accounts_v2');
     if (accountsJson != null && accountsJson.isNotEmpty) {
@@ -1203,6 +1285,8 @@ class AppStateManager extends ChangeNotifier {
     }
 
     _syncLikedStateForActiveChild();
+    CalmVoiceService.instance.setAssistantMuted(
+        !(currentAccount?.voiceAssistantEnabled ?? true));
     _refreshSmartVoiceAssistantSuggestion(speakAloud: false);
     _startScreenTimeTracker();
     isInitialized = true;
@@ -1835,13 +1919,138 @@ class AppStateManager extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> toggleVoiceAssistant(bool enabled) async {
+  bool get isAssistantVoiceMuted =>
+      !(currentAccount?.voiceAssistantEnabled ?? true);
+
+  Future<void> toggleVoiceAssistant([bool? enabled]) async {
     if (currentAccount == null) return;
-    currentAccount!.voiceAssistantEnabled = enabled;
-    if (!enabled) {
-      await CalmVoiceService.instance.stopSpeaking();
+    final bool nextVal = enabled ?? !currentAccount!.voiceAssistantEnabled;
+    currentAccount!.voiceAssistantEnabled = nextVal;
+    await CalmVoiceService.instance.setAssistantMuted(!nextVal);
+    await _saveAccounts();
+    notifyListeners();
+  }
+
+  Future<void> logChildRealtimeActivity({
+    required String statusSummary,
+    required String actionLogText,
+    required String categoryBadge,
+  }) async {
+    if (currentAccount == null) return;
+    final child = currentAccount!.activeChild;
+    child.currentLiveStatus = statusSummary;
+    child.liveActivityTimeline.insert(
+      0,
+      ChildActivityLogEntry(
+        timestampIso: DateTime.now().toIso8601String(),
+        actionTitle: actionLogText,
+        categoryBadge: categoryBadge,
+      ),
+    );
+    if (child.liveActivityTimeline.length > 35) {
+      child.liveActivityTimeline.removeLast();
+    }
+    if (remoteMonitorApiUrl.trim().isNotEmpty) {
+      try {
+        http.post(
+          Uri.parse(remoteMonitorApiUrl.trim()),
+          headers: {'Content-Type': 'application/json; charset=utf-8'},
+          body: jsonEncode({
+            'event': 'child_activity_update',
+            'childId': child.id,
+            'childName': child.name,
+            'currentLiveStatus': child.currentLiveStatus,
+            'isLocked': child.isDeviceRemotelyLocked,
+            'usedMinutesToday': child.usedMinutesToday,
+            'starsEarned': child.starsEarned,
+            'intelligencePoints': child.intelligencePoints,
+            'latestAction': actionLogText,
+          }),
+        );
+      } catch (_) {}
     }
     await _saveAccounts();
+    notifyListeners();
+  }
+
+  Future<void> setRemoteDeviceLockForChild({
+    required String childId,
+    required bool lockDevice,
+    String? customLockMessage,
+  }) async {
+    if (currentAccount == null) return;
+    final idx = currentAccount!.children.indexWhere((c) => c.id == childId);
+    if (idx == -1) return;
+    final child = currentAccount!.children[idx];
+    child.isDeviceRemotelyLocked = lockDevice;
+    if (customLockMessage != null && customLockMessage.trim().isNotEmpty) {
+      child.remoteLockReasonMessage = customLockMessage.trim();
+    }
+    child.currentLiveStatus = lockDevice
+        ? '🔒 الشاشة مقفلة عن بُعد بأمر من هاتف ولي الأمر'
+        : '🟢 متصل — تم فتح القفل الأبوي عن بُعد';
+    child.liveActivityTimeline.insert(
+      0,
+      ChildActivityLogEntry(
+        timestampIso: DateTime.now().toIso8601String(),
+        actionTitle: lockDevice
+            ? 'قام ولي الأمر بقفل شاشة موبايل الطفل عن بُعد'
+            : 'قام ولي الأمر بفتح قفل شاشة موبايل الطفل عن بُعد',
+        categoryBadge: 'تحكم عن بُعد',
+      ),
+    );
+    if (lockDevice) {
+      await CalmVoiceService.instance.stopSpeaking();
+    }
+    if (remoteMonitorApiUrl.trim().isNotEmpty) {
+      try {
+        await http
+            .post(
+              Uri.parse(remoteMonitorApiUrl.trim()),
+              headers: {'Content-Type': 'application/json; charset=utf-8'},
+              body: jsonEncode({
+                'command': lockDevice ? 'LOCK_CHILD_DEVICE' : 'UNLOCK_CHILD_DEVICE',
+                'childId': child.id,
+                'childName': child.name,
+                'lockReason': child.remoteLockReasonMessage,
+                'timestamp': DateTime.now().toIso8601String(),
+              }),
+            )
+            .timeout(const Duration(seconds: 6));
+      } catch (_) {}
+    }
+    await _saveAccounts();
+    notifyListeners();
+  }
+
+  Future<void> sendRemoteVoiceAlertToChild({
+    required String childId,
+    required String messageText,
+  }) async {
+    if (currentAccount == null || messageText.trim().isEmpty) return;
+    final idx = currentAccount!.children.indexWhere((c) => c.id == childId);
+    if (idx == -1) return;
+    final child = currentAccount!.children[idx];
+    currentAssistantBannerMessage = '📲 رسالة من بابا وماما: ${messageText.trim()}';
+    child.liveActivityTimeline.insert(
+      0,
+      ChildActivityLogEntry(
+        timestampIso: DateTime.now().toIso8601String(),
+        actionTitle: 'رسالة صوتية مباشرة من ولي الأمر: «${messageText.trim()}»',
+        categoryBadge: 'تنبيه أبوي',
+      ),
+    );
+    await CalmVoiceService.instance.speakCalmly(
+      'رسالة من بابا وماما يا ${child.name}: ${messageText.trim()}',
+      forceSpeakEvenIfAssistantMuted: true,
+    );
+    await _saveAccounts();
+    notifyListeners();
+  }
+
+  Future<void> updateRemoteMonitorApiUrl(String url) async {
+    remoteMonitorApiUrl = url.trim();
+    await _prefs.setString('remote_monitor_api_url', remoteMonitorApiUrl);
     notifyListeners();
   }
 
@@ -1929,10 +2138,21 @@ class AppStateManager extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> recordVideoTransitionWatched() async {
+  Future<void> recordVideoTransitionWatched({String? videoTitle}) async {
     if (currentAccount == null) return;
     final child = currentAccount!.activeChild;
     child.watchedVideosToday++;
+    if (videoTitle != null && videoTitle.isNotEmpty) {
+      child.currentLiveStatus = '🎬 يشاهد الآن قصة: «$videoTitle»';
+      child.liveActivityTimeline.insert(
+        0,
+        ChildActivityLogEntry(
+          timestampIso: DateTime.now().toIso8601String(),
+          actionTitle: 'بدأ مشاهدة قصة «$videoTitle»',
+          categoryBadge: 'مشاهدة قصة',
+        ),
+      );
+    }
     if (child.usedMinutesToday < child.dailyTimeLimit) {
       child.usedMinutesToday =
           min(child.dailyTimeLimit, child.usedMinutesToday + 2);
@@ -1978,6 +2198,15 @@ class AppStateManager extends ChangeNotifier {
     child.gamesCompletedCount++;
     final String key = 'game_${gameId}_${DateTime.now().millisecondsSinceEpoch}';
     child.completedActivities.add(key);
+    child.currentLiveStatus = '🧠 يلعب ويتفوق في: «$gameTitle»';
+    child.liveActivityTimeline.insert(
+      0,
+      ChildActivityLogEntry(
+        timestampIso: DateTime.now().toIso8601String(),
+        actionTitle: 'أنجز تحدياً في ($gameTitle) وكسب +$earnedIqPoints نقطة ذكاء',
+        categoryBadge: 'ألعاب الذكاء',
+      ),
+    );
 
     if (currentAccount!.emailNotificationsEnabled &&
         child.gamesCompletedCount % 2 == 0) {
@@ -3611,6 +3840,60 @@ class _MultiChildProfilesScreenState extends State<MultiChildProfilesScreen> {
                     ],
                   ),
                 ),
+                const SizedBox(height: 10),
+                GestureDetector(
+                  onTap: () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => ParentalStudioScreen(
+                          appState: widget.appState,
+                          initialTabIndex: 0,
+                        ),
+                      ),
+                    );
+                  },
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 14, vertical: 12),
+                    decoration: BoxDecoration(
+                      gradient: const LinearGradient(
+                        colors: [Color(0xFF0F766E), Color(0xFF1E293B)],
+                      ),
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(color: const Color(0xFF14B8A6)),
+                    ),
+                    child: const Row(
+                      children: [
+                        Icon(Icons.phonelink_lock_rounded,
+                            color: Color(0xFFF59E0B), size: 28),
+                        SizedBox(width: 10),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                '📲 وضع هاتف ولي الأمر: المراقبة الحية وقفل موبايل الطفل عن بُعد',
+                                style: TextStyle(
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 13,
+                                  color: Colors.white,
+                                ),
+                              ),
+                              Text(
+                                'شاهد ماذا يفعل طفلك الآن على التطبيق واقفل شاشة موبايله بضغطة زر من موبايلك',
+                                style: TextStyle(
+                                    fontSize: 11, color: Colors.white70),
+                              ),
+                            ],
+                          ),
+                        ),
+                        Icon(Icons.arrow_forward_ios,
+                            size: 16, color: Colors.white70),
+                      ],
+                    ),
+                  ),
+                ),
                 const SizedBox(height: 14),
                 Text(
                   'مرحباً بك يا ${account.fullName} 👋 اختر ملف الطفل للبدء أو أضف طفلاً جديداً:',
@@ -3769,7 +4052,10 @@ class _VerticalVideoFeedPlayerScreenState
     setState(() {
       _currentVideoIndex = index;
     });
-    widget.appState.recordVideoTransitionWatched();
+    final videos = _filteredVideos;
+    final String? title =
+        (index >= 0 && index < videos.length) ? videos[index].title : null;
+    widget.appState.recordVideoTransitionWatched(videoTitle: title);
   }
 
   void _openBrainGamesHub() {
@@ -3853,10 +4139,33 @@ class _VerticalVideoFeedPlayerScreenState
                         ),
                       ),
                       IconButton(
-                        onPressed: () => CalmVoiceService.instance.speakCalmly(
-                          widget.appState.currentAssistantBannerMessage,
+                        tooltip: widget.appState.isAssistantVoiceMuted
+                            ? 'تشغيل صوت المساعد الذكي'
+                            : 'كتم صوت المساعد الذكي',
+                        onPressed: () async {
+                          await widget.appState.toggleVoiceAssistant();
+                          setModalState(() {});
+                        },
+                        icon: Icon(
+                          widget.appState.isAssistantVoiceMuted
+                              ? Icons.volume_off_rounded
+                              : Icons.volume_up_rounded,
+                          color: widget.appState.isAssistantVoiceMuted
+                              ? Colors.redAccent
+                              : const Color(0xFF14B8A6),
+                          size: 26,
                         ),
-                        icon: const Icon(Icons.volume_up_rounded,
+                      ),
+                      IconButton(
+                        tooltip: 'قراءة النص الآن',
+                        onPressed: () {
+                          if (!widget.appState.isAssistantVoiceMuted) {
+                            CalmVoiceService.instance.speakCalmly(
+                              widget.appState.currentAssistantBannerMessage,
+                            );
+                          }
+                        },
+                        icon: const Icon(Icons.play_circle_fill_rounded,
                             color: Color(0xFFF59E0B), size: 28),
                       ),
                     ],
@@ -4567,6 +4876,7 @@ class _VerticalVideoFeedPlayerScreenState
     final videos = _filteredVideos;
     final bool sleepCurtainActive = widget.appState.isDailyLimitReached;
     final bool subscriptionExpired = widget.appState.isSubscriptionExpired;
+    final bool remotelyLockedByParent = activeChild.isDeviceRemotelyLocked;
 
     return Scaffold(
       body: Stack(
@@ -4600,7 +4910,8 @@ class _VerticalVideoFeedPlayerScreenState
                 final item = videos[index];
                 final isCurrentPage = index == _currentVideoIndex &&
                     !sleepCurtainActive &&
-                    !subscriptionExpired;
+                    !subscriptionExpired &&
+                    !remotelyLockedByParent;
                 return VerticalVideoFeedItemWidget(
                   key: ValueKey('${item.id}_$index'),
                   video: item,
@@ -4875,12 +5186,48 @@ class _VerticalVideoFeedPlayerScreenState
                             ),
                           ),
                           const SizedBox(width: 6),
-                          const Text(
-                            'اقتراح ذكي',
-                            style: TextStyle(
-                              fontSize: 11,
-                              color: Color(0xFF38BDF8),
-                              fontWeight: FontWeight.bold,
+                          GestureDetector(
+                            onTap: () =>
+                                widget.appState.toggleVoiceAssistant(),
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 8, vertical: 4),
+                              decoration: BoxDecoration(
+                                color: widget.appState.isAssistantVoiceMuted
+                                    ? Colors.redAccent.withOpacity(0.25)
+                                    : const Color(0xFF14B8A6).withOpacity(0.25),
+                                borderRadius: BorderRadius.circular(12),
+                                border: Border.all(
+                                  color: widget.appState.isAssistantVoiceMuted
+                                      ? Colors.redAccent
+                                      : const Color(0xFF14B8A6),
+                                ),
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(
+                                    widget.appState.isAssistantVoiceMuted
+                                        ? Icons.volume_off_rounded
+                                        : Icons.volume_up_rounded,
+                                    size: 14,
+                                    color: widget.appState.isAssistantVoiceMuted
+                                        ? Colors.redAccent
+                                        : const Color(0xFF14B8A6),
+                                  ),
+                                  const SizedBox(width: 4),
+                                  Text(
+                                    widget.appState.isAssistantVoiceMuted
+                                        ? 'صامت'
+                                        : 'كتم المساعد',
+                                    style: const TextStyle(
+                                      fontSize: 10,
+                                      fontWeight: FontWeight.bold,
+                                      color: Colors.white,
+                                    ),
+                                  ),
+                                ],
+                              ),
                             ),
                           ),
                         ],
@@ -5003,10 +5350,92 @@ class _VerticalVideoFeedPlayerScreenState
                             borderRadius: BorderRadius.circular(16),
                           ),
                         ),
-                        onPressed: () => _openParentalGateDialog(initialTab: 1),
+                        onPressed: () => _openParentalGateDialog(initialTab: 2),
                         icon: const Icon(Icons.workspace_premium),
                         label: const Text(
                           'استعراض باقات الاشتراك ووسائل الدفع المصرية',
+                          style: TextStyle(fontWeight: FontWeight.bold),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+
+          if (remotelyLockedByParent)
+            Container(
+              width: double.infinity,
+              height: double.infinity,
+              decoration: const BoxDecoration(
+                gradient: LinearGradient(
+                  colors: [Color(0xFF0F172A), Color(0xFF31102F), Color(0xFF0F172A)],
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                ),
+              ),
+              child: SafeArea(
+                child: Padding(
+                  padding: const EdgeInsets.all(28),
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(24),
+                        decoration: BoxDecoration(
+                          color: Colors.redAccent.withOpacity(0.18),
+                          shape: BoxShape.circle,
+                          border: Border.all(color: Colors.redAccent, width: 2.5),
+                        ),
+                        child: const Icon(
+                          Icons.phonelink_lock_rounded,
+                          size: 68,
+                          color: Colors.redAccent,
+                        ),
+                      ),
+                      const SizedBox(height: 22),
+                      Text(
+                        '🔒 تم قفل شاشة الموبايل عن بُعد يا ${activeChild.name}',
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(
+                          fontSize: 23,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.white,
+                        ),
+                      ),
+                      const SizedBox(height: 14),
+                      Container(
+                        padding: const EdgeInsets.all(16),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF1E293B),
+                          borderRadius: BorderRadius.circular(16),
+                          border: Border.all(color: Colors.white24),
+                        ),
+                        child: Text(
+                          activeChild.remoteLockReasonMessage,
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(
+                            fontSize: 16,
+                            height: 1.6,
+                            color: Color(0xFFFDE68A),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 28),
+                      ElevatedButton.icon(
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: const Color(0xFF14B8A6),
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 24, vertical: 14),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(16),
+                          ),
+                        ),
+                        onPressed: () => _openParentalGateDialog(initialTab: 0),
+                        icon: const Icon(Icons.lock_open_rounded),
+                        label: const Text(
+                          'فتح القفل الأبوي (بوابة الوالدين / الرمز السري)',
                           style: TextStyle(fontWeight: FontWeight.bold),
                         ),
                       ),
@@ -5496,9 +5925,9 @@ class _ParentalStudioScreenState extends State<ParentalStudioScreen>
   void initState() {
     super.initState();
     _tabController = TabController(
-      length: 5,
+      length: 6,
       vsync: this,
-      initialIndex: widget.initialTabIndex.clamp(0, 4),
+      initialIndex: widget.initialTabIndex.clamp(0, 5),
     );
     _remoteUrlCtrl =
         TextEditingController(text: widget.appState.remoteFeedUrl);
@@ -6127,6 +6556,392 @@ class _ParentalStudioScreenState extends State<ParentalStudioScreen>
     );
   }
 
+  Widget _buildRemoteChildMonitorAndLockTab(
+      ParentAccount account, ChildProfile activeChild) {
+    final TextEditingController lockMsgCtrl = TextEditingController(
+      text: activeChild.remoteLockReasonMessage,
+    );
+    final TextEditingController voiceBroadcastCtrl = TextEditingController();
+    final TextEditingController monitorUrlCtrl = TextEditingController(
+      text: widget.appState.remoteMonitorApiUrl,
+    );
+
+    return ListView(
+      padding: const EdgeInsets.all(20),
+      children: [
+        Container(
+          padding: const EdgeInsets.all(18),
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              colors: activeChild.isDeviceRemotelyLocked
+                  ? [const Color(0xFF7F1D1D), const Color(0xFF1E293B)]
+                  : [const Color(0xFF0F766E), const Color(0xFF1E293B)],
+            ),
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(
+              color: activeChild.isDeviceRemotelyLocked
+                  ? Colors.redAccent
+                  : const Color(0xFF14B8A6),
+              width: 2,
+            ),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Text(activeChild.chosenAvatar,
+                      style: const TextStyle(fontSize: 40)),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'مراقبة موبايل الطفل: ${activeChild.name}',
+                          style: const TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.white,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          'كود الربط العائلي بين موبايل الأب وموبايل الطفل: ${activeChild.familyPairingCode}',
+                          style: const TextStyle(
+                            fontSize: 12,
+                            color: Color(0xFFFDE68A),
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                    decoration: BoxDecoration(
+                      color: activeChild.isDeviceRemotelyLocked
+                          ? Colors.redAccent
+                          : const Color(0xFF10B981),
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                    child: Text(
+                      activeChild.isDeviceRemotelyLocked
+                          ? '🔒 مقفل عن بُعد'
+                          : '🟢 متصل الآن',
+                      style: const TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.white,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 14),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.black26,
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      '📡 ماذا يفعل الطفل الآن على الموبايل؟ (بث الحالة الفوري):',
+                      style: TextStyle(fontSize: 12, color: Colors.white70),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      activeChild.currentLiveStatus,
+                      style: const TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.white,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 14),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceAround,
+                children: [
+                  _MonitorStatBadge(
+                    label: 'وقت المشاهدة',
+                    value:
+                        '${activeChild.usedMinutesToday}/${activeChild.dailyTimeLimit} د',
+                    icon: Icons.timer_outlined,
+                  ),
+                  _MonitorStatBadge(
+                    label: 'نقاط الذكاء',
+                    value: '🧠 ${activeChild.intelligencePoints}',
+                    icon: Icons.psychology_outlined,
+                  ),
+                  _MonitorStatBadge(
+                    label: 'النجوم والفصاحة',
+                    value:
+                        '⭐ ${activeChild.starsEarned} (${activeChild.correctPronunciationsCount})',
+                    icon: Icons.star_border_rounded,
+                  ),
+                ],
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                controller: lockMsgCtrl,
+                decoration: const InputDecoration(
+                  labelText: 'رسالة القفل التي تظهر على شاشة موبايل الطفل',
+                  prefixIcon: Icon(Icons.message_outlined),
+                ),
+              ),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Expanded(
+                    child: SizedBox(
+                      height: 50,
+                      child: ElevatedButton.icon(
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: activeChild.isDeviceRemotelyLocked
+                              ? const Color(0xFF10B981)
+                              : Colors.redAccent,
+                          foregroundColor: Colors.white,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(14),
+                          ),
+                        ),
+                        onPressed: () async {
+                          final bool nextLock =
+                              !activeChild.isDeviceRemotelyLocked;
+                          await widget.appState.setRemoteDeviceLockForChild(
+                            childId: activeChild.id,
+                            lockDevice: nextLock,
+                            customLockMessage: lockMsgCtrl.text,
+                          );
+                          if (mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text(
+                                  nextLock
+                                      ? '🔒 تم إرسال أمر قفل شاشة موبايل (${activeChild.name}) فوراً!'
+                                      : '🟢 تم فتح قفل شاشة موبايل (${activeChild.name}) عن بُعد!',
+                                ),
+                                backgroundColor: nextLock
+                                    ? Colors.redAccent
+                                    : const Color(0xFF14B8A6),
+                              ),
+                            );
+                          }
+                        },
+                        icon: Icon(
+                          activeChild.isDeviceRemotelyLocked
+                              ? Icons.lock_open_rounded
+                              : Icons.phonelink_lock_rounded,
+                        ),
+                        label: Text(
+                          activeChild.isDeviceRemotelyLocked
+                              ? 'فتح قفل موبايل الطفل الآن'
+                              : 'قفل موبايل الطفل الآن من موبايلي 🔒',
+                          style: const TextStyle(
+                              fontWeight: FontWeight.bold, fontSize: 14),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 16),
+        if (account.children.length > 1) ...[
+          const Text(
+            '👦👧 التبديل السريع لمراقبة طفل آخر في العائلة:',
+            style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
+          ),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 8,
+            children: account.children.map((c) {
+              final bool isCurr = c.id == activeChild.id;
+              return ChoiceChip(
+                selected: isCurr,
+                selectedColor: const Color(0xFF14B8A6),
+                label: Text(
+                    '${c.chosenAvatar} ${c.name} ${c.isDeviceRemotelyLocked ? "🔒" : "🟢"}'),
+                onSelected: (_) => widget.appState.switchActiveChild(c.id),
+              );
+            }).toList(),
+          ),
+          const SizedBox(height: 16),
+        ],
+        Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: const Color(0xFF1E293B),
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(color: Colors.white12),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const Expanded(
+                    child: Text(
+                      '🎙️ التحكم في صوت المساعد الذكي وإرسال تنبيه صوتي لموبايل الطفل',
+                      style:
+                          TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
+                    ),
+                  ),
+                  Switch(
+                    value: !widget.appState.isAssistantVoiceMuted,
+                    activeColor: const Color(0xFF14B8A6),
+                    onChanged: (val) =>
+                        widget.appState.toggleVoiceAssistant(val),
+                  ),
+                ],
+              ),
+              Text(
+                widget.appState.isAssistantVoiceMuted
+                    ? '🔇 المساعد الذكي مكتوم حالياً على جهاز الطفل (اضغط المفتاح لإعادة تشغيل الصوت)'
+                    : '🔊 صوت المساعد الذكي مفعّل حالياً على جهاز الطفل',
+                style: TextStyle(
+                  fontSize: 12,
+                  color: widget.appState.isAssistantVoiceMuted
+                      ? Colors.redAccent
+                      : const Color(0xFF14B8A6),
+                ),
+              ),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: voiceBroadcastCtrl,
+                      decoration: const InputDecoration(
+                        labelText: 'أرسل رسالة ينطقها المساعد الذكي للطفل فوراً',
+                        hintText: 'مثال: يا فارس حان وقت غسل اليدين والعشاء!',
+                        prefixIcon: Icon(Icons.campaign_outlined),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  ElevatedButton(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFFF59E0B),
+                      foregroundColor: Colors.black87,
+                    ),
+                    onPressed: () async {
+                      if (voiceBroadcastCtrl.text.trim().isEmpty) return;
+                      await widget.appState.sendRemoteVoiceAlertToChild(
+                        childId: activeChild.id,
+                        messageText: voiceBroadcastCtrl.text,
+                      );
+                      voiceBroadcastCtrl.clear();
+                      if (mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text(
+                                '🔊 تم إرسال ونطق التنبيه الصوتي على موبايل الطفل!'),
+                          ),
+                        );
+                      }
+                    },
+                    child: const Text('إرسال صوتي',
+                        style: TextStyle(fontWeight: FontWeight.bold)),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 16),
+        Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: const Color(0xFF1E293B),
+            borderRadius: BorderRadius.circular(18),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                '🌐 رابط المزامنة السحابية بين موبايل الأب وموبايل الطفل (اختياري)',
+                style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 6),
+              const Text(
+                'لربط جهازين منفصلين عبر الإنترنت، ضع رابط نقطة المزامنة (Firebase / REST Endpoint) ليتم إرسال أوامر القفل وسجل النشاط لحظياً:',
+                style: TextStyle(fontSize: 11, color: Colors.white70),
+              ),
+              const SizedBox(height: 10),
+              Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: monitorUrlCtrl,
+                      decoration: const InputDecoration(
+                        labelText: 'Remote Monitor & Lock Sync URL',
+                        hintText: 'https://your-family-sync.firebaseio.com/lock.json',
+                        prefixIcon: Icon(Icons.cloud_queue),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  OutlinedButton(
+                    onPressed: () {
+                      widget.appState
+                          .updateRemoteMonitorApiUrl(monitorUrlCtrl.text);
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text('تم حفظ رابط مزامنة القفل والمراقبة عن بُعد'),
+                        ),
+                      );
+                    },
+                    child: const Text('حفظ'),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 18),
+        Text(
+          '📋 سجل النشاط الحي لما يفعله (${activeChild.name}) على التطبيق:',
+          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+        ),
+        const SizedBox(height: 8),
+        ...activeChild.liveActivityTimeline.map((entry) {
+          return Card(
+            color: const Color(0xFF1E293B),
+            margin: const EdgeInsets.only(bottom: 8),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(14),
+            ),
+            child: ListTile(
+              dense: true,
+              leading: const Icon(Icons.bolt_rounded, color: Color(0xFF38BDF8)),
+              title: Text(
+                entry.actionTitle,
+                style:
+                    const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+              ),
+              subtitle: Text(
+                '${entry.categoryBadge} • ${entry.timestampIso.substring(0, 16).replaceAll("T", " ")}',
+                style: const TextStyle(fontSize: 11, color: Colors.white60),
+              ),
+            ),
+          );
+        }),
+      ],
+    );
+  }
+
   void _showEditChildModal(ChildProfile child) {
     final editNameCtrl = TextEditingController(text: child.name);
     String editAge = child.age;
@@ -6273,6 +7088,9 @@ class _ParentalStudioScreenState extends State<ParentalStudioScreen>
               unselectedLabelColor: Colors.white70,
               tabs: const [
                 Tab(
+                    icon: Icon(Icons.phonelink_lock_rounded),
+                    text: 'مراقبة وقفل موبايل الطفل'),
+                Tab(
                     icon: Icon(Icons.cloud_download_outlined),
                     text: 'استقبال الفيديوهات'),
                 Tab(
@@ -6291,6 +7109,7 @@ class _ParentalStudioScreenState extends State<ParentalStudioScreen>
           body: TabBarView(
             controller: _tabController,
             children: [
+              _buildRemoteChildMonitorAndLockTab(account, activeChild),
               ListView(
                 padding: const EdgeInsets.all(20),
                 children: [
@@ -7475,6 +8294,208 @@ class _ParentalStudioScreenState extends State<ParentalStudioScreen>
   }
 }
 
+class _MonitorStatBadge extends StatelessWidget {
+  final String label;
+  final String value;
+  final IconData icon;
+
+  const _MonitorStatBadge({
+    required this.label,
+    required this.value,
+    required this.icon,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: const Color(0xFF0F172A),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.white12),
+      ),
+      child: Column(
+        children: [
+          Icon(icon, size: 18, color: const Color(0xFF14B8A6)),
+          const SizedBox(height: 4),
+          Text(
+            value,
+            style: const TextStyle(
+              fontWeight: FontWeight.bold,
+              fontSize: 13,
+              color: Colors.white,
+            ),
+          ),
+          Text(
+            label,
+            style: const TextStyle(fontSize: 10, color: Colors.white60),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class EtiquetteStrokePath {
+  final List<Offset> points;
+  final Color color;
+  final double strokeWidth;
+
+  const EtiquetteStrokePath({
+    required this.points,
+    required this.color,
+    required this.strokeWidth,
+  });
+}
+
+class EtiquetteDrawingCanvasPainter extends CustomPainter {
+  final List<EtiquetteStrokePath> strokes;
+  final int templateIndex;
+
+  const EtiquetteDrawingCanvasPainter({
+    required this.strokes,
+    required this.templateIndex,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final Paint guidePaint = Paint()
+      ..color = Colors.white.withOpacity(0.16)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 4.0;
+
+    final Offset center = Offset(size.width / 2, size.height / 2);
+    final double radius = min(size.width, size.height) * 0.34;
+
+    switch (templateIndex % 6) {
+      case 0:
+        final Path heartPath = Path();
+        heartPath.moveTo(center.dx, center.dy + radius * 0.75);
+        heartPath.cubicTo(
+          center.dx - radius * 1.3,
+          center.dy + radius * 0.1,
+          center.dx - radius * 0.8,
+          center.dy - radius * 0.95,
+          center.dx,
+          center.dy - radius * 0.3,
+        );
+        heartPath.cubicTo(
+          center.dx + radius * 0.8,
+          center.dy - radius * 0.95,
+          center.dx + radius * 1.3,
+          center.dy + radius * 0.1,
+          center.dx,
+          center.dy + radius * 0.75,
+        );
+        canvas.drawPath(heartPath, guidePaint);
+        break;
+      case 1:
+        canvas.drawCircle(center, radius, guidePaint);
+        canvas.drawCircle(
+            Offset(center.dx - radius * 0.35, center.dy - radius * 0.25),
+            radius * 0.12,
+            guidePaint);
+        canvas.drawCircle(
+            Offset(center.dx + radius * 0.35, center.dy - radius * 0.25),
+            radius * 0.12,
+            guidePaint);
+        final Rect smileRect = Rect.fromCircle(
+            center: Offset(center.dx, center.dy + radius * 0.05),
+            radius: radius * 0.55);
+        canvas.drawArc(smileRect, 0.2, pi - 0.4, false, guidePaint);
+        break;
+      case 2:
+        final Path starPath = Path();
+        const int pointsCount = 5;
+        for (int i = 0; i < pointsCount * 2; i++) {
+          final double r = (i.isEven) ? radius : radius * 0.45;
+          final double angle = (i * pi / pointsCount) - (pi / 2);
+          final Offset pt = Offset(
+            center.dx + r * cos(angle),
+            center.dy + r * sin(angle),
+          );
+          if (i == 0) {
+            starPath.moveTo(pt.dx, pt.dy);
+          } else {
+            starPath.lineTo(pt.dx, pt.dy);
+          }
+        }
+        starPath.close();
+        canvas.drawPath(starPath, guidePaint);
+        break;
+      case 3:
+        final Rect crownRect = Rect.fromCenter(
+            center: center, width: radius * 1.6, height: radius * 1.1);
+        final Path flowerPath = Path();
+        for (int i = 0; i < 6; i++) {
+          final double angle = i * pi / 3;
+          canvas.drawCircle(
+            Offset(center.dx + radius * 0.55 * cos(angle),
+                center.dy + radius * 0.55 * sin(angle)),
+            radius * 0.38,
+            guidePaint,
+          );
+        }
+        canvas.drawCircle(center, radius * 0.3, guidePaint);
+        canvas.drawLine(
+          Offset(center.dx, center.dy + radius * 0.6),
+          Offset(center.dx, size.height - 20),
+          guidePaint,
+        );
+        flowerPath.addRect(crownRect);
+        break;
+      case 4:
+        final Rect houseBody = Rect.fromCenter(
+          center: Offset(center.dx, center.dy + radius * 0.25),
+          width: radius * 1.4,
+          height: radius * 1.1,
+        );
+        canvas.drawRect(houseBody, guidePaint);
+        final Path roof = Path()
+          ..moveTo(houseBody.left - 15, houseBody.top)
+          ..lineTo(center.dx, center.dy - radius * 0.85)
+          ..lineTo(houseBody.right + 15, houseBody.top)
+          ..close();
+        canvas.drawPath(roof, guidePaint);
+        break;
+      default:
+        canvas.drawCircle(center, radius, guidePaint);
+        for (int i = 0; i < 8; i++) {
+          final double angle = i * pi / 4;
+          canvas.drawLine(
+            Offset(center.dx + radius * 1.1 * cos(angle),
+                center.dy + radius * 1.1 * sin(angle)),
+            Offset(center.dx + radius * 1.45 * cos(angle),
+                center.dy + radius * 1.45 * sin(angle)),
+            guidePaint,
+          );
+        }
+        break;
+    }
+
+    for (final stroke in strokes) {
+      if (stroke.points.length < 2) continue;
+      final Paint p = Paint()
+        ..color = stroke.color
+        ..strokeCap = StrokeCap.round
+        ..strokeJoin = StrokeJoin.round
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = stroke.strokeWidth;
+
+      final Path path = Path()
+        ..moveTo(stroke.points.first.dx, stroke.points.first.dy);
+      for (int i = 1; i < stroke.points.length; i++) {
+        path.lineTo(stroke.points[i].dx, stroke.points[i].dy);
+      }
+      canvas.drawPath(path, p);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant EtiquetteDrawingCanvasPainter oldDelegate) =>
+      true;
+}
+
 class BrainGamesHubScreen extends StatefulWidget {
   final AppStateManager appState;
   const BrainGamesHubScreen({super.key, required this.appState});
@@ -7486,6 +8507,21 @@ class BrainGamesHubScreen extends StatefulWidget {
 class _BrainGamesHubScreenState extends State<BrainGamesHubScreen> {
   int _selectedGameIndex = 0;
 
+  int _etiquetteBoardIndex = 0;
+  final List<EtiquetteStrokePath> _drawingStrokes = [];
+  Color _selectedBrushColor = const Color(0xFF14B8A6);
+  double _selectedBrushSize = 8.0;
+  int _drawnPointsCount = 0;
+
+  int _oddQuestionIndex = 0;
+  String? _oddFeedback;
+  bool _oddCorrect = false;
+
+  int _patternQuestionIndex = 0;
+  String? _patternFeedback;
+  bool _patternCorrect = false;
+
+  int _memoryLevel = 1;
   int _memoryMoves = 0;
   int _memoryMatches = 0;
   List<String> _memoryBoard = [];
@@ -7494,13 +8530,13 @@ class _BrainGamesHubScreenState extends State<BrainGamesHubScreen> {
   int? _firstFlippedIndex;
   bool _memoryBusy = false;
 
-  int _patternQuestionIndex = 0;
-  String? _patternFeedback;
-  bool _patternCorrect = false;
-
-  int _mathTargetCount = 3;
+  int _mathRoundNumber = 1;
+  String _mathMode = 'count';
+  int _mathTargetCount = 4;
+  int _mathAddendA = 2;
+  int _mathAddendB = 3;
   String _mathEmoji = '🍎';
-  List<int> _mathOptions = [2, 3, 5, 4];
+  List<int> _mathOptions = [3, 4, 5, 6];
   String? _mathFeedback;
   bool _mathAnswered = false;
 
@@ -7508,34 +8544,260 @@ class _BrainGamesHubScreenState extends State<BrainGamesHubScreen> {
   String? _wordFeedback;
   bool _wordCorrect = false;
 
-  int _oddQuestionIndex = 0;
-  String? _oddFeedback;
-  bool _oddCorrect = false;
+  static const List<Map<String, dynamic>> _etiquetteDrawingLessons = [
+    {
+      'title': '١. قلب المحبة وبرّ الوالدين ❤️',
+      'badge': 'آداب العائلة',
+      'etiquetteLesson':
+          'من أجمل الآداب أن نبتسم في وجه ماما وبابا ونقول لهما بقلب محب: «شكراً لكما، أنا أحبكما كثيراً!»',
+      'arabicDuaOrPhrase': '«رَبِّ ارْحَمْهُمَا كَمَا رَبَّيَانِي صَغِيراً»',
+      'instruction': 'لوّن وارسم بيدك داخل وحول قلب المحبة الجميل باللون الذي تحبه!',
+    },
+    {
+      'title': '٢. الوجه المبتسم وإلقاء السلام 😊',
+      'badge': 'آداب التحية',
+      'etiquetteLesson':
+          'الطفل المؤدب يبدأ من يقابله بابتسامة لطيفة ويقول بصوت هادئ: «السلام عليكم ورحمة الله» لأن الابتسامة في وجه أخيك صدقة.',
+      'arabicDuaOrPhrase': '«السَّلَامُ عَلَيْكُمْ وَرَحْمَةُ اللَّهِ»',
+      'instruction': 'ارسم ملامح الوجه المبتسم ولوّنه بألوان البهجة والسرور!',
+    },
+    {
+      'title': '٣. نجمة الصدق والأمانة ⭐',
+      'badge': 'الأخلاق الحميدة',
+      'etiquetteLesson':
+          'الصدق يجعلنا مضيئين مثل النجمة اللامعة في السماء! الطفل البطل يقول الحقيقة دائماً ويحافظ على الأمانة.',
+      'arabicDuaOrPhrase': '«أَنَا صَادِقٌ وَأَمِينٌ دَائِماً»',
+      'instruction': 'تتبع خطوط نجمة الصدق الخماسية ولوّنها باللون الذهبي والأصفر!',
+    },
+    {
+      'title': '٤. زهرة النظافة وترتيب الغرفة 🌸',
+      'badge': 'آداب النظافة',
+      'etiquetteLesson':
+          'النظافة من الإيمان! نحن نغسل أيدينا بالماء والصابون قبل الأكل وبعده، ونرتب ألعابنا ونحافظ على جمال حديقتنا.',
+      'arabicDuaOrPhrase': '«بِسْمِ اللَّهِ في أَوَّلِهِ وَآخِرِهِ»',
+      'instruction': 'ارسم بتلات زهرة النظافة الجميلة ولوّن أوراقها الخضراء!',
+    },
+    {
+      'title': '٥. بيت الكرم والاستئذان قبل الدخول 🏠',
+      'badge': 'آداب الاستئذان',
+      'etiquetteLesson':
+          'من الآداب الراقية أن نطرق الباب برفق ثلاث مرات ونستأذن قبل الدخول إلى أي غرفة، ونكرم ضيوفنا في بيتنا الجميل.',
+      'arabicDuaOrPhrase': '«أَسْتَأْذِنُ بِأَدَبٍ قَبْلَ الدُّخُولِ»',
+      'instruction': 'ارسم سقف وجدران بيت الكرم ولوّنه بألوان دافئة ومبهجة!',
+    },
+    {
+      'title': '٦. شمس النشاط المبكر وذكر الصباح ☀️',
+      'badge': 'آداب الصباح',
+      'etiquetteLesson':
+          'ننام مبكراً ونستيقظ في الصباح بنشاط، فنرتب فراشنا ونفرش أسناننا ونشكر الله على يوم جديد جميل.',
+      'arabicDuaOrPhrase': '«الحَمْدُ لِلَّهِ الَّذِي أَحْيَانَا بَعْدَ مَا أَمَاتَنَا»',
+      'instruction': 'ارسم أشعة الشمس الدافئة الساطعة ولوّنها بالبرتقالي والأصفر!',
+    },
+  ];
+
+  static const List<Map<String, dynamic>> _oddOneOutQuestions = [
+    {
+      'category': 'الفواكه والمواصلات',
+      'visualTheme': 0,
+      'title': '١. أخرج الشكل المختلف لتنمية قوة الملاحظة والتصنيف:',
+      'items': ['🍎', '🍌', '🍇', '🚗'],
+      'odd': '🚗',
+      'explanation': 'السيارة وسيلة مواصلات، بينما التفاحة والموز والعنب من الفواكه!',
+    },
+    {
+      'category': 'الحيوانات والنباتات',
+      'visualTheme': 1,
+      'title': '٢. أي عنصر من هذه العناصر يختلف عن الباقين؟',
+      'items': ['🐱', '🐰', '🦁', '🌲'],
+      'odd': '🌲',
+      'explanation': 'الشجرة من النباتات، بينما القطة والأرنب والأسد من الحيوانات!',
+    },
+    {
+      'category': 'عناصر السماء والملابس',
+      'visualTheme': 2,
+      'title': '٣. ابحث بدقة عن الرمز الذي لا يوجد في السماء:',
+      'items': ['☀️', '🌙', '⭐', '👟'],
+      'odd': '👟',
+      'explanation': 'الحذاء نرتديه في أقدامنا، أما الشمس والقمر والنجمة فتوجد في السماء!',
+    },
+    {
+      'category': 'أدوات الدراسة والطعام',
+      'visualTheme': 3,
+      'title': '٤. أخرج العنصر غير المشابه لأدوات المدرسة:',
+      'items': ['✏️', '📘', '🖍️', '🍕'],
+      'odd': '🍕',
+      'explanation': 'البيتزا طعام، بينما القلم والكتاب والألوان أدوات مدرسية للتعلم!',
+    },
+    {
+      'category': 'كائنات البحر والطيور',
+      'visualTheme': 0,
+      'title': '٥. أي كائن من هذه الكائنات لا يعيش تحت الماء؟',
+      'items': ['🐬', '🐠', '🐙', '🦅'],
+      'odd': '🦅',
+      'explanation': 'الصقر يطير عالياً في الجو، بينما الدولفين والسمكة والأخطبوط كائنات بحرية!',
+    },
+    {
+      'category': 'وسائل الطيران والبر',
+      'visualTheme': 1,
+      'title': '٦. ما هي الوسيلة التي لا تطير في الهواء؟',
+      'items': ['✈️', '🚁', '🚀', '🚲'],
+      'odd': '🚲',
+      'explanation': 'الدراجة تسير على الأرض، بينما الطائرة والمروحية والصاروخ تطير في السماء!',
+    },
+    {
+      'category': 'الفصول والملابس',
+      'visualTheme': 2,
+      'title': '٧. أي قطعة ملابس لا تناسب فصل الشتاء البارد؟',
+      'items': ['🧥', '🧣', '🧤', '🩱'],
+      'odd': '🩱',
+      'explanation': 'ملابس السباحة للصيف، أما المعطف والوشاح والقفاز فنلبسها في الشتاء الدافئ!',
+    },
+    {
+      'category': 'الأشكال الهندسية',
+      'visualTheme': 3,
+      'title': '٨. لاحظ الزوايا والأضلاع: أي شكل هندسي مختلف؟',
+      'items': ['🟥', '🟦', '🟧', '🔵'],
+      'odd': '🔵',
+      'explanation': 'الدائرة مستديرة بدون زوايا، بينما المربعات لها أربعة أضلاع وزوايا!',
+    },
+    {
+      'category': 'الحواس الخمس',
+      'visualTheme': 0,
+      'title': '٩. أي رمز لا يمثل عضواً من أعضاء الحواس في الوجه؟',
+      'items': ['👁️', '👂', '👃', '🪑'],
+      'odd': '🪑',
+      'explanation': 'الكرسي من الأثاث، بينما العين والأذن والأنف من نعم الحواس التي وهبنا الله إياها!',
+    },
+    {
+      'category': 'الخضروات والحلويات',
+      'visualTheme': 1,
+      'title': '١٠. أي عنصر ليس من الخضروات الطبيعية الطازجة؟',
+      'items': ['🥕', '🥒', '🥦', '🍩'],
+      'odd': '🍩',
+      'explanation': 'الدونات من الحلويات المصنعة، بينما الجزر والخيار والبروكلي خضروات صحية مفيدة!',
+    },
+    {
+      'category': 'الآلات الصوتية والرياضة',
+      'visualTheme': 2,
+      'title': '١١. أي عنصر يستخدم للرياضة وليس لإصدار الأصوات؟',
+      'items': ['🥁', '🎺', '🔔', '⚽'],
+      'odd': '⚽',
+      'explanation': 'كرة القدم للرياضة والجرى، بينما الطبلة والبوق والجرس تصدر أصواتاً!',
+    },
+    {
+      'category': 'الحشرات والزواحف',
+      'visualTheme': 3,
+      'title': '١٢. أي كائن من هذه المجموعة لا يملك أجنحة للطيران؟',
+      'items': ['🦋', '🐝', '🐞', '🐢'],
+      'odd': '🐢',
+      'explanation': 'السلحفاة تمشي ببطء على الأرض، بينما الفراشة والنحلة والدعسوقة تطير بأجنحتها!',
+    },
+    {
+      'category': 'أدوات المائدة والنجارة',
+      'visualTheme': 0,
+      'title': '١٣. أي أداة لا نستخدمها أثناء تناول الطعام على المائدة؟',
+      'items': ['🥄', '🍴', '🥣', '🔨'],
+      'odd': '🔨',
+      'explanation': 'المطرقة أداة للنجارة والإصلاح، بينما الملعقة والشوكة والطبق لأدب الطعام!',
+    },
+    {
+      'category': 'الأرقام والحروف',
+      'visualTheme': 1,
+      'title': '١٤. دقّق النظر: أي رمز ليس من الأرقام الحسابية؟',
+      'items': ['١', '٥', '٩', 'أ'],
+      'odd': 'أ',
+      'explanation': 'حرف الألف (أ) من الحروف الأبجدية، بينما ١ و ٥ و ٩ أرقام حسابية!',
+    },
+    {
+      'category': 'مصادر الضوء والظلام',
+      'visualTheme': 2,
+      'title': '١٥. أي عنصر لا يضيء ولا يمنحنا النور؟',
+      'items': ['💡', '🕯️', '🔦', '🪨'],
+      'odd': '🪨',
+      'explanation': 'الصخرة جسم معتم لا يضيء، بينما المصباح والشمعة والكشاف مصادر للضوء!',
+    },
+    {
+      'category': 'الأطباء والمهن',
+      'visualTheme': 3,
+      'title': '١٦. أي غرض لا ينتمي لحقيبة الطبيب المعالج؟',
+      'items': ['🩺', '🩹', '🌡️', '🍳'],
+      'odd': '🍳',
+      'explanation': 'المقلاة من أدوات الطباخ في المطبخ، أما السماعة والضمادة وميزان الحرارة فللطبيب!',
+    },
+  ];
 
   static const List<Map<String, dynamic>> _patternQuestions = [
     {
       'sequence': ['🌙', '⭐', '🌙', '⭐', '🌙'],
       'options': ['⭐', '☀️', '🍎', '🚗'],
       'answer': '⭐',
-      'hint': 'لاحظ التتابع: هلال ثم نجمة ثم هلال ثم نجمة... ماذا يأتي بعد الهلال؟',
+      'hint': '١. هلال ثم نجمة ثم هلال ثم نجمة... ماذا يأتي بعد الهلال؟',
     },
     {
       'sequence': ['🟥', '🟦', '🟥', '🟦', '🟥'],
       'options': ['🟩', '🟦', '🟨', '🟪'],
       'answer': '🟦',
-      'hint': 'أحمر ثم أزرق ثم أحمر ثم أزرق... ما هو اللون التالي بعد الأحمر؟',
+      'hint': '٢. أحمر ثم أزرق ثم أحمر ثم أزرق... ما هو اللون التالي؟',
     },
     {
       'sequence': ['🌱', '🌿', '🌳', '🌱', '🌿'],
       'options': ['🌳', '🍎', '🦋', '🎈'],
       'answer': '🌳',
-      'hint': 'بذرة صغيرة ثم نبتة ثم شجرة كبيرة... ما الذي يكمل الدورة؟',
+      'hint': '٣. بذرة صغيرة ثم نبتة ثم شجرة كبيرة... ما الذي يكمل الدورة؟',
     },
     {
       'sequence': ['🐱', '🐱', '🐰', '🐱', '🐱'],
       'options': ['🦁', '🐰', '🐸', '🐼'],
       'answer': '🐰',
-      'hint': 'قطتان ثم أرنب، قطتان ثم... ماذا؟',
+      'hint': '٤. قطتان ثم أرنب، قطتان ثم... ماذا؟',
+    },
+    {
+      'sequence': ['🍎', '🍌', '🍇', '🍎', '🍌'],
+      'options': ['🍉', '🍇', '🍓', '🍒'],
+      'answer': '🍇',
+      'hint': '٥. تفاحة، موزة، عنب — تفاحة، موزة، ثم ماذا؟',
+    },
+    {
+      'sequence': ['⬆️', '➡️', '⬇️', '⬅️', '⬆️'],
+      'options': ['➡️', '⬆️', '⬇️', '⬅️'],
+      'answer': '➡️',
+      'hint': '٦. السهم يدور مع عقارب الساعة: أعلى، يمين، أسفل، يسار، أعلى... ثم؟',
+    },
+    {
+      'sequence': ['🐣', '🐥', '🐓', '🐣', '🐥'],
+      'options': ['🐓', '🦅', '🦆', '🦉'],
+      'answer': '🐓',
+      'hint': '٧. كتكوت يفقس ثم يكبر ثم يصبح دجاجة كاملة!',
+    },
+    {
+      'sequence': ['🔵', '🔵', '🟡', '🔵', '🔵'],
+      'options': ['🔴', '🟡', '🟢', '🟣'],
+      'answer': '🟡',
+      'hint': '٨. دائرتان زرقاوان ثم دائرة صفراء، دائرتان زرقاوان ثم ماذا؟',
+    },
+    {
+      'sequence': ['☀️', '🌤️', '🌙', '☀️', '🌤️'],
+      'options': ['🌙', '⭐', '⚡', '🌈'],
+      'answer': '🌙',
+      'hint': '٩. صباح مشرق، ثم عصر، ثم ليل وهدوء!',
+    },
+    {
+      'sequence': ['🚗', '🚌', '🚂', '🚗', '🚌'],
+      'options': ['🚲', '🚂', '✈️', '🚢'],
+      'answer': '🚂',
+      'hint': '١٠. سيارة صغيرة ثم حافلة متوسطة ثم قطار طويل!',
+    },
+    {
+      'sequence': ['🔺', '🔷', '🔺', '🔷', '🔺'],
+      'options': ['🔷', '⬛', '⚪', '⭐'],
+      'answer': '🔷',
+      'hint': '١١. مثلث أحمر ثم معين أزرق بالتبادل!',
+    },
+    {
+      'sequence': ['🐝', '🌸', '🍯', '🐝', '🌸'],
+      'options': ['🍯', '🦋', '🍃', '🍎'],
+      'answer': '🍯',
+      'hint': '١٢. نحلة تزور الزهرة فتصنع لنا العسل اللذيذ!',
     },
   ];
 
@@ -7544,7 +8806,7 @@ class _BrainGamesHubScreenState extends State<BrainGamesHubScreen> {
       'emoji': '🦁',
       'word': 'أَسَد',
       'missingDisplay': 'ـسَد',
-      'prompt': 'اختر الحرف الأول لكلمة (أَسَد):',
+      'prompt': '١. اختر الحرف الأول لكلمة (أَسَد):',
       'options': ['أ', 'ب', 'ت', 'س'],
       'answer': 'أ',
     },
@@ -7552,7 +8814,7 @@ class _BrainGamesHubScreenState extends State<BrainGamesHubScreen> {
       'emoji': '🍎',
       'word': 'تُفَّاحَة',
       'missingDisplay': 'ـفَّاحَة',
-      'prompt': 'اختر الحرف الأول لكلمة (تُفَّاحَة):',
+      'prompt': '٢. اختر الحرف الأول لكلمة (تُفَّاحَة):',
       'options': ['ج', 'ت', 'خ', 'م'],
       'answer': 'ت',
     },
@@ -7560,7 +8822,7 @@ class _BrainGamesHubScreenState extends State<BrainGamesHubScreen> {
       'emoji': '🌙',
       'word': 'قَمَر',
       'missingDisplay': 'ـمَر',
-      'prompt': 'اختر الحرف الأول لكلمة (قَمَر):',
+      'prompt': '٣. اختر الحرف الأول لكلمة (قَمَر):',
       'options': ['ف', 'ق', 'ك', 'ل'],
       'answer': 'ق',
     },
@@ -7568,36 +8830,73 @@ class _BrainGamesHubScreenState extends State<BrainGamesHubScreen> {
       'emoji': '🦋',
       'word': 'فَرَاشَة',
       'missingDisplay': 'ـرَاشَة',
-      'prompt': 'اختر الحرف الأول لكلمة (فَرَاشَة):',
+      'prompt': '٤. اختر الحرف الأول لكلمة (فَرَاشَة):',
       'options': ['ص', 'ض', 'ف', 'ن'],
       'answer': 'ف',
     },
-  ];
-
-  static const List<Map<String, dynamic>> _oddOneOutQuestions = [
     {
-      'title': 'أخرج الشكل المختلف لتنمية قوة الملاحظة والتصنيف:',
-      'items': ['🍎', '🍌', '🍇', '🚗'],
-      'odd': '🚗',
-      'explanation': 'السيارة وسيلة مواصلات، بينما التفاحة والموز والعنب من الفواكه اللذيذة!',
+      'emoji': '🐪',
+      'word': 'جَمَل',
+      'missingDisplay': 'ـمَل',
+      'prompt': '٥. اختر الحرف الأول لكلمة (جَمَل):',
+      'options': ['ج', 'ح', 'خ', 'ع'],
+      'answer': 'ج',
     },
     {
-      'title': 'أي عنصر من هذه العناصر يختلف عن الباقين؟',
-      'items': ['🐱', '🐰', '🦁', '🌲'],
-      'odd': '🌲',
-      'explanation': 'الشجرة من النباتات، بينما القطة والأرنب والأسد من الحيوانات!',
+      'emoji': '🐟',
+      'word': 'سَمَكَة',
+      'missingDisplay': 'ـمَكَة',
+      'prompt': '٦. اختر الحرف الأول لكلمة (سَمَكَة):',
+      'options': ['ش', 'س', 'ص', 'ز'],
+      'answer': 'س',
     },
     {
-      'title': 'ابحث بدقة عن الرمز المختلف في السماء:',
-      'items': ['☀️', '🌙', '⭐', '👟'],
-      'odd': '👟',
-      'explanation': 'الحذاء نرتديه في أقدامنا، أما الشمس والقمر والنجمة فتوجد في السماء!',
+      'emoji': '☀️',
+      'word': 'شَمْس',
+      'missingDisplay': 'ـمْس',
+      'prompt': '٧. اختر الحرف الأول لكلمة (شَمْس):',
+      'options': ['س', 'ش', 'ص', 'ض'],
+      'answer': 'ش',
     },
     {
-      'title': 'أخرج العنصر غير المشابه للبقية:',
-      'items': ['✏️', '📘', '🖍️', '🍕'],
-      'odd': '🍕',
-      'explanation': 'البيتزا طعام، بينما القلم والكتاب والألوان أدوات مدرسية للتعلم!',
+      'emoji': '🌹',
+      'word': 'وَرْدَة',
+      'missingDisplay': 'ـرْدَة',
+      'prompt': '٨. اختر الحرف الأول لكلمة (وَرْدَة):',
+      'options': ['ر', 'ز', 'و', 'ي'],
+      'answer': 'و',
+    },
+    {
+      'emoji': '📘',
+      'word': 'كِتَاب',
+      'missingDisplay': 'ـتَاب',
+      'prompt': '٩. اختر الحرف الأول لكلمة (كِتَاب):',
+      'options': ['ق', 'ك', 'ل', 'م'],
+      'answer': 'ك',
+    },
+    {
+      'emoji': '🐝',
+      'word': 'نَحْلَة',
+      'missingDisplay': 'ـحْلَة',
+      'prompt': '١٠. اختر الحرف الأول لكلمة (نَحْلَة):',
+      'options': ['ب', 'ت', 'ن', 'ي'],
+      'answer': 'ن',
+    },
+    {
+      'emoji': '🐘',
+      'word': 'فِيل',
+      'missingDisplay': 'ـيل',
+      'prompt': '١١. اختر الحرف الأول لكلمة (فِيل):',
+      'options': ['ف', 'ق', 'و', 'هـ'],
+      'answer': 'ف',
+    },
+    {
+      'emoji': '🏠',
+      'word': 'بَيْت',
+      'missingDisplay': 'ـيْت',
+      'prompt': '١٢. اختر الحرف الأول لكلمة (بَيْت):',
+      'options': ['ب', 'ت', 'ث', 'ن'],
+      'answer': 'ب',
     },
   ];
 
@@ -7606,28 +8905,26 @@ class _BrainGamesHubScreenState extends State<BrainGamesHubScreen> {
     super.initState();
     _initMemoryGame();
     _generateMathRound();
+    widget.appState.logChildRealtimeActivity(
+      statusSummary: '🧠 يتفاعل داخل واحة ألعاب الذكاء والآداب',
+      actionLogText: 'دخل إلى واحة ألعاب الذكاء وتنمية القدرات والآداب',
+      categoryBadge: 'ألعاب الذكاء',
+    );
     final childName =
         widget.appState.currentAccount?.activeChild.name ?? 'بطل حنين';
     CalmVoiceService.instance.speakCalmly(
-      'أهلاً بك يا $childName في واحة ألعاب الذكاء وتنمية القدرات! اختر اللعبة التي تحبها لنفكر ونلعب بهدوء.',
+      'أهلاً بك يا $childName في واحة ألعاب الذكاء ورسم الآداب! اختر اللعبة التي تحبها.',
     );
   }
 
   void _initMemoryGame() {
-    final List<String> pairs = [
-      '🦁',
-      '🦁',
-      '🦋',
-      '🦋',
-      '🌙',
-      '🌙',
-      '🍎',
-      '🍎',
-      '🚀',
-      '🚀',
-      '🐬',
-      '🐬'
+    final List<List<String>> levelThemes = [
+      ['🦁', '🦁', '🦋', '🦋', '🌙', '🌙', '🍎', '🍎', '🚀', '🚀', '🐬', '🐬'],
+      ['🌸', '🌸', '🐢', '🐢', '🎈', '🎈', '🍓', '🍓', '⛵', '⛵', '🦉', '🦉'],
+      ['👑', '👑', '💎', '💎', '🌈', '🌈', '🍉', '🍉', '🚁', '🚁', '🐼', '🐼'],
     ];
+    final List<String> pairs =
+        List<String>.from(levelThemes[(_memoryLevel - 1) % levelThemes.length]);
     pairs.shuffle(Random());
     setState(() {
       _memoryBoard = pairs;
@@ -7665,29 +8962,29 @@ class _BrainGamesHubScreenState extends State<BrainGamesHubScreen> {
 
       if (_memoryMatches == _memoryBoard.length ~/ 2) {
         await widget.appState.recordBrainGameWin(
-          gameId: 'memory_match',
-          gameTitle: 'لعبة الذاكرة البصرية والتركيز',
+          gameId: 'memory_match_lvl_$_memoryLevel',
+          gameTitle: 'لعبة الذاكرة البصرية (المستوى $_memoryLevel)',
           earnedIqPoints: 20,
           earnedStars: 2,
         );
         CalmVoiceService.instance.speakCalmly(
-          'ما شاء الله! ذاكرتك البصرية قوية جداً يا بطل! حصلت على عشرين نقطة ذكاء ونجمتين!',
+          'ما شاء الله! أنهيت المستوى $_memoryLevel في لعبة الذاكرة البصرية بنجاح!',
         );
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
+            SnackBar(
               content: Text(
-                  '🎉 بطل الذاكرة! ربحت +20 نقطة ذكاء و +2 نجمة!'),
-              backgroundColor: Color(0xFF14B8A6),
+                  '🎉 بطل الذاكرة! أنهيت المستوى $_memoryLevel وربحت +20 نقطة ذكاء!'),
+              backgroundColor: const Color(0xFF14B8A6),
             ),
           );
         }
       } else {
-        CalmVoiceService.instance.speakCalmly('تطابق رائع! استمر يا بطل.');
+        CalmVoiceService.instance.speakCalmly('تطابق رائع!');
       }
     } else {
       _memoryBusy = true;
-      await Future.delayed(const Duration(milliseconds: 750));
+      await Future.delayed(const Duration(milliseconds: 700));
       if (mounted) {
         setState(() {
           _memoryRevealed[firstIdx] = false;
@@ -7700,14 +8997,27 @@ class _BrainGamesHubScreenState extends State<BrainGamesHubScreen> {
 
   void _generateMathRound() {
     final random = Random();
-    final List<String> emojis = ['🍎', '⭐', '🦋', '🎈', '🍓', '🐠'];
-    final int target = random.nextInt(7) + 2;
+    final List<String> emojis = ['🍎', '⭐', '🦋', '🎈', '🍓', '🐠', '🌸', '🐣'];
+    final String mode = (_mathRoundNumber % 2 == 1) ? 'count' : 'add';
+    int target;
+    int a = 2;
+    int b = 2;
+    if (mode == 'count') {
+      target = random.nextInt(8) + 2;
+    } else {
+      a = random.nextInt(5) + 1;
+      b = random.nextInt(5) + 1;
+      target = a + b;
+    }
     final Set<int> opts = {target};
     while (opts.length < 4) {
-      opts.add(random.nextInt(9) + 1);
+      opts.add(random.nextInt(10) + 1);
     }
     final List<int> shuffled = opts.toList()..shuffle(random);
     setState(() {
+      _mathMode = mode;
+      _mathAddendA = a;
+      _mathAddendB = b;
       _mathTargetCount = target;
       _mathEmoji = emojis[random.nextInt(emojis.length)];
       _mathOptions = shuffled;
@@ -7726,34 +9036,40 @@ class _BrainGamesHubScreenState extends State<BrainGamesHubScreen> {
 
         final List<Map<String, dynamic>> gamesMeta = [
           {
-            'title': 'الذاكرة البصرية',
-            'icon': '🃏',
-            'skill': 'تنمية التركيز والذاكرة قصيرة المدى',
-            'color': const Color(0xFF14B8A6),
+            'title': 'مرسم الآداب والأخلاق',
+            'icon': '🎨',
+            'skill': 'رسم حر وتلوين مع تعلم الآداب الإسلامية والتربوية',
+            'color': const Color(0xFF10B981),
           },
           {
-            'title': 'الألغاز والمنطق',
+            'title': 'قوة الملاحظة (١٦ مرحلة)',
+            'icon': '🔍',
+            'skill': '١٦ تحدياً متنوعاً للتصنيف واكتشاف المختلف',
+            'color': const Color(0xFFEC4899),
+          },
+          {
+            'title': 'الألغاز والمنطق (١٢ لغزاً)',
             'icon': '🧩',
-            'skill': 'استنتاج الأنماط والتفكير المنطقي',
+            'skill': 'استنتاج الأنماط والتسلسل المنطقي',
             'color': const Color(0xFFF59E0B),
           },
           {
-            'title': 'الحساب والعدّ',
+            'title': 'الذاكرة البصرية المتدرجة',
+            'icon': '🃏',
+            'skill': 'تقوية التركيز والذاكرة قصيرة المدى',
+            'color': const Color(0xFF14B8A6),
+          },
+          {
+            'title': 'الحساب والجمع البصري',
             'icon': '🔢',
-            'skill': 'تنمية الذكاء الرياضي والعدّ البصري',
+            'skill': 'العدّ والجمع المصور لتنمية الذكاء الرياضي',
             'color': const Color(0xFF38BDF8),
           },
           {
-            'title': 'الحروف والكلمات',
+            'title': 'الحروف والكلمات (١٢ كلمة)',
             'icon': '🔤',
-            'skill': 'الذكاء اللغوي ومخارج الحروف العربية',
+            'skill': 'تنمية الذكاء اللغوي ومخارج الحروف العربية',
             'color': const Color(0xFFA855F7),
-          },
-          {
-            'title': 'قوة الملاحظة',
-            'icon': '🔍',
-            'skill': 'التصنيف الذكي واكتشاف الشكل المختلف',
-            'color': const Color(0xFFEC4899),
           },
         ];
 
@@ -7761,9 +9077,25 @@ class _BrainGamesHubScreenState extends State<BrainGamesHubScreen> {
           appBar: AppBar(
             backgroundColor: const Color(0xFF1E293B),
             title: const Text(
-              '🧠 واحة ألعاب الذكاء وتنمية القدرات',
-              style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold),
+              '🧠 واحة ألعاب الذكاء ومرسم الآداب',
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
             ),
+            actions: [
+              IconButton(
+                tooltip: widget.appState.isAssistantVoiceMuted
+                    ? 'تشغيل صوت المساعد الذكي'
+                    : 'كتم صوت المساعد الذكي',
+                onPressed: () => widget.appState.toggleVoiceAssistant(),
+                icon: Icon(
+                  widget.appState.isAssistantVoiceMuted
+                      ? Icons.volume_off_rounded
+                      : Icons.volume_up_rounded,
+                  color: widget.appState.isAssistantVoiceMuted
+                      ? Colors.redAccent
+                      : const Color(0xFF14B8A6),
+                ),
+              ),
+            ],
           ),
           body: Container(
             decoration: const BoxDecoration(
@@ -7777,9 +9109,9 @@ class _BrainGamesHubScreenState extends State<BrainGamesHubScreen> {
               child: Column(
                 children: [
                   Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+                    padding: const EdgeInsets.fromLTRB(16, 10, 16, 6),
                     child: Container(
-                      padding: const EdgeInsets.all(14),
+                      padding: const EdgeInsets.all(12),
                       decoration: BoxDecoration(
                         color: const Color(0xFF1E293B),
                         borderRadius: BorderRadius.circular(18),
@@ -7789,25 +9121,25 @@ class _BrainGamesHubScreenState extends State<BrainGamesHubScreen> {
                       child: Row(
                         children: [
                           Text(child.chosenAvatar,
-                              style: const TextStyle(fontSize: 36)),
-                          const SizedBox(width: 12),
+                              style: const TextStyle(fontSize: 34)),
+                          const SizedBox(width: 10),
                           Expanded(
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
                                 Text(
-                                  'البطل الذكي: ${child.name}',
+                                  'البطل المبدع: ${child.name}',
                                   style: const TextStyle(
-                                    fontSize: 16,
+                                    fontSize: 15,
                                     fontWeight: FontWeight.bold,
                                     color: Colors.white,
                                   ),
                                 ),
-                                const SizedBox(height: 4),
+                                const SizedBox(height: 3),
                                 Text(
-                                  'نقاط الذكاء (IQ): 🧠 ${child.intelligencePoints} • النجوم: ⭐ ${child.starsEarned} • التحديات: ${child.gamesCompletedCount}',
+                                  'نقاط الذكاء: 🧠 ${child.intelligencePoints} • النجوم: ⭐ ${child.starsEarned} • الألعاب المنجزة: ${child.gamesCompletedCount}',
                                   style: const TextStyle(
-                                    fontSize: 12,
+                                    fontSize: 11,
                                     color: Color(0xFFFDE68A),
                                     fontWeight: FontWeight.w600,
                                   ),
@@ -7815,22 +9147,12 @@ class _BrainGamesHubScreenState extends State<BrainGamesHubScreen> {
                               ],
                             ),
                           ),
-                          IconButton(
-                            onPressed: () {
-                              final meta = gamesMeta[_selectedGameIndex];
-                              CalmVoiceService.instance.speakCalmly(
-                                'أنت الآن في لعبة ${meta['title']} لتنمية ${meta['skill']}.',
-                              );
-                            },
-                            icon: const Icon(Icons.volume_up_rounded,
-                                color: Color(0xFF38BDF8)),
-                          ),
                         ],
                       ),
                     ),
                   ),
                   SizedBox(
-                    height: 82,
+                    height: 84,
                     child: ListView.builder(
                       scrollDirection: Axis.horizontal,
                       padding: const EdgeInsets.symmetric(horizontal: 12),
@@ -7842,24 +9164,38 @@ class _BrainGamesHubScreenState extends State<BrainGamesHubScreen> {
                         return GestureDetector(
                           onTap: () {
                             setState(() => _selectedGameIndex = i);
+                            widget.appState.logChildRealtimeActivity(
+                              statusSummary: '🎮 يلعب الآن: ${g['title']}',
+                              actionLogText: 'انتقل إلى لعبة (${g['title']})',
+                              categoryBadge: 'ألعاب الذكاء',
+                            );
                             CalmVoiceService.instance.speakCalmly(
-                              'لعبة ${g['title']}، ${g['skill']}',
+                              '${g['title']}، ${g['skill']}',
                             );
                           },
                           child: AnimatedContainer(
                             duration: const Duration(milliseconds: 220),
-                            width: 145,
+                            width: 152,
                             margin: const EdgeInsets.symmetric(
                                 horizontal: 5, vertical: 4),
                             padding: const EdgeInsets.all(10),
                             decoration: BoxDecoration(
-                              color: isSelected
-                                  ? accent.withOpacity(0.25)
-                                  : const Color(0xFF1E293B),
-                              borderRadius: BorderRadius.circular(16),
+                              gradient: isSelected
+                                  ? LinearGradient(
+                                      colors: [
+                                        accent.withOpacity(0.38),
+                                        const Color(0xFF1E293B),
+                                      ],
+                                      begin: Alignment.topLeft,
+                                      end: Alignment.bottomRight,
+                                    )
+                                  : null,
+                              color:
+                                  isSelected ? null : const Color(0xFF1E293B),
+                              borderRadius: BorderRadius.circular(18),
                               border: Border.all(
                                 color: isSelected ? accent : Colors.white12,
-                                width: isSelected ? 2 : 1,
+                                width: isSelected ? 2.2 : 1,
                               ),
                             ),
                             child: Column(
@@ -7873,7 +9209,7 @@ class _BrainGamesHubScreenState extends State<BrainGamesHubScreen> {
                                   maxLines: 1,
                                   overflow: TextOverflow.ellipsis,
                                   style: const TextStyle(
-                                    fontSize: 13,
+                                    fontSize: 12,
                                     fontWeight: FontWeight.bold,
                                     color: Colors.white,
                                   ),
@@ -7903,119 +9239,500 @@ class _BrainGamesHubScreenState extends State<BrainGamesHubScreen> {
   Widget _buildActiveBrainGameCard() {
     switch (_selectedGameIndex) {
       case 0:
-        return _buildMemoryMatchGame();
+        return _buildEtiquetteDrawingStudioGame();
       case 1:
-        return _buildPatternLogicGame();
-      case 2:
-        return _buildVisualMathGame();
-      case 3:
-        return _buildArabicWordBuilderGame();
-      case 4:
         return _buildOddOneOutGame();
-      default:
+      case 2:
+        return _buildPatternLogicGame();
+      case 3:
         return _buildMemoryMatchGame();
+      case 4:
+        return _buildVisualMathGame();
+      case 5:
+        return _buildArabicWordBuilderGame();
+      default:
+        return _buildEtiquetteDrawingStudioGame();
     }
   }
 
-  Widget _buildMemoryMatchGame() {
+  Widget _buildEtiquetteDrawingStudioGame() {
+    final lesson = _etiquetteDrawingLessons[
+        _etiquetteBoardIndex % _etiquetteDrawingLessons.length];
+    final String title = lesson['title'] as String;
+    final String badge = lesson['badge'] as String;
+    final String etiquetteText = lesson['etiquetteLesson'] as String;
+    final String phrase = lesson['arabicDuaOrPhrase'] as String;
+    final String instruction = lesson['instruction'] as String;
+
+    final List<Color> palette = [
+      const Color(0xFF14B8A6),
+      const Color(0xFFF59E0B),
+      const Color(0xFFEC4899),
+      const Color(0xFF38BDF8),
+      const Color(0xFFA855F7),
+      const Color(0xFFEF4444),
+      const Color(0xFF22C55E),
+      Colors.white,
+    ];
+
     return Container(
       padding: const EdgeInsets.all(18),
       decoration: BoxDecoration(
-        color: const Color(0xFF1E293B),
-        borderRadius: BorderRadius.circular(22),
-        border: Border.all(color: const Color(0xFF14B8A6).withOpacity(0.5)),
+        gradient: const LinearGradient(
+          colors: [Color(0xFF064E3B), Color(0xFF1E293B)],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(color: const Color(0xFF10B981), width: 1.8),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF10B981).withOpacity(0.25),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Text(
+                  '🎨 $badge (${(_etiquetteBoardIndex % _etiquetteDrawingLessons.length) + 1}/${_etiquetteDrawingLessons.length})',
+                  style: const TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.bold,
+                    color: Color(0xFFA7F3D0),
+                  ),
+                ),
+              ),
+              IconButton(
+                tooltip: 'استمع لدرس الأدب بصوت هادئ',
+                onPressed: () {
+                  CalmVoiceService.instance.speakCalmly(
+                    '$title. $etiquetteText. $phrase',
+                    rate: 0.35,
+                  );
+                },
+                icon: const Icon(Icons.volume_up_rounded,
+                    color: Color(0xFFFDE68A)),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Text(
+            title,
+            style: const TextStyle(
+              fontSize: 18,
+              fontWeight: FontWeight.bold,
+              color: Colors.white,
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            etiquetteText,
+            style: const TextStyle(
+              fontSize: 13,
+              height: 1.5,
+              color: Colors.white70,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            decoration: BoxDecoration(
+              color: Colors.black26,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: const Color(0xFFF59E0B).withOpacity(0.5)),
+            ),
+            child: Text(
+              '🗣️ عبارة الأدب: $phrase',
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.bold,
+                color: Color(0xFFFDE68A),
+              ),
+            ),
+          ),
+          const SizedBox(height: 10),
+          Text(
+            '✏️ $instruction',
+            style: const TextStyle(fontSize: 12, color: Colors.white),
+          ),
+          const SizedBox(height: 10),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(20),
+            child: Container(
+              height: 250,
+              width: double.infinity,
+              decoration: BoxDecoration(
+                color: const Color(0xFF0F172A),
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(color: Colors.white24, width: 1.5),
+              ),
+              child: GestureDetector(
+                onPanStart: (details) {
+                  setState(() {
+                    _drawingStrokes.add(
+                      EtiquetteStrokePath(
+                        points: [details.localPosition],
+                        color: _selectedBrushColor,
+                        strokeWidth: _selectedBrushSize,
+                      ),
+                    );
+                    _drawnPointsCount++;
+                  });
+                },
+                onPanUpdate: (details) {
+                  if (_drawingStrokes.isEmpty) return;
+                  setState(() {
+                    _drawingStrokes.last.points.add(details.localPosition);
+                    _drawnPointsCount++;
+                  });
+                },
+                child: CustomPaint(
+                  size: const Size(double.infinity, 250),
+                  painter: EtiquetteDrawingCanvasPainter(
+                    strokes: _drawingStrokes,
+                    templateIndex: _etiquetteBoardIndex,
+                  ),
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              const Text('الألوان: ', style: TextStyle(fontSize: 12)),
+              Expanded(
+                child: Wrap(
+                  spacing: 8,
+                  runSpacing: 6,
+                  children: palette.map((c) {
+                    final bool isSel = _selectedBrushColor == c;
+                    return GestureDetector(
+                      onTap: () => setState(() => _selectedBrushColor = c),
+                      child: Container(
+                        width: 28,
+                        height: 28,
+                        decoration: BoxDecoration(
+                          color: c,
+                          shape: BoxShape.circle,
+                          border: Border.all(
+                            color: isSel ? Colors.white : Colors.white24,
+                            width: isSel ? 3 : 1,
+                          ),
+                        ),
+                      ),
+                    );
+                  }).toList(),
+                ),
+              ),
+              IconButton(
+                tooltip: 'مسح اللوحة',
+                onPressed: () {
+                  setState(() {
+                    _drawingStrokes.clear();
+                    _drawnPointsCount = 0;
+                  });
+                },
+                icon: const Icon(Icons.delete_sweep_outlined,
+                    color: Colors.redAccent),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              const Text('حجم الفرشاة:', style: TextStyle(fontSize: 12)),
+              Expanded(
+                child: Slider(
+                  value: _selectedBrushSize,
+                  min: 4.0,
+                  max: 18.0,
+                  activeColor: _selectedBrushColor,
+                  onChanged: (v) => setState(() => _selectedBrushSize = v),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              Expanded(
+                child: ElevatedButton.icon(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF10B981),
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                  ),
+                  onPressed: () async {
+                    if (_drawnPointsCount < 8) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text(
+                              '🎨 ارسم ولوّن أولاً داخل اللوحة بأصبعك لتكسب نقاط الذكاء والآداب!'),
+                          backgroundColor: Color(0xFFF59E0B),
+                        ),
+                      );
+                      return;
+                    }
+                    await widget.appState.recordBrainGameWin(
+                      gameId: 'etiquette_draw_$_etiquetteBoardIndex',
+                      gameTitle: 'مرسم الآداب ($title)',
+                      earnedIqPoints: 20,
+                      earnedStars: 2,
+                    );
+                    CalmVoiceService.instance.speakCalmly(
+                      'لوحة فنية رائعة يا فنان الآداب! تعلمت اليوم: $phrase، وربحت عشرين نقطة ذكاء ونجمتين!',
+                    );
+                    if (mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text(
+                              '🌟 فنان مؤدب! ربحت +20 نقطة ذكاء و +2 نجمة!'),
+                          backgroundColor: Color(0xFF10B981),
+                        ),
+                      );
+                    }
+                  },
+                  icon: const Icon(Icons.check_circle_outline),
+                  label: const Text(
+                    'أنهيت الرسم وتعلمت الأدب (+20 ذكاء)',
+                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              OutlinedButton.icon(
+                onPressed: () {
+                  setState(() {
+                    _etiquetteBoardIndex++;
+                    _drawingStrokes.clear();
+                    _drawnPointsCount = 0;
+                  });
+                  final nextLesson = _etiquetteDrawingLessons[
+                      _etiquetteBoardIndex % _etiquetteDrawingLessons.length];
+                  CalmVoiceService.instance.speakCalmly(
+                    '${nextLesson['title']}. ${nextLesson['etiquetteLesson']}',
+                  );
+                },
+                icon: const Icon(Icons.navigate_next),
+                label: const Text('اللوحة التالية'),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildOddOneOutGame() {
+    final int idx = _oddQuestionIndex % _oddOneOutQuestions.length;
+    final q = _oddOneOutQuestions[idx];
+    final String category = q['category'] as String;
+    final int themeIdx = q['visualTheme'] as int;
+    final String title = q['title'] as String;
+    final List<String> items = List<String>.from(q['items'] as List);
+    final String odd = q['odd'] as String;
+    final String explanation = q['explanation'] as String;
+
+    final List<List<Color>> themeGradients = [
+      [const Color(0xFF31102F), const Color(0xFF1E293B)],
+      [const Color(0xFF0F3D3E), const Color(0xFF1E293B)],
+      [const Color(0xFF1E1B4B), const Color(0xFF172554)],
+      [const Color(0xFF3B1D0A), const Color(0xFF1E293B)],
+    ];
+    final List<Color> themeBorders = [
+      const Color(0xFFEC4899),
+      const Color(0xFF14B8A6),
+      const Color(0xFF38BDF8),
+      const Color(0xFFF59E0B),
+    ];
+
+    final Color activeBorder = themeBorders[themeIdx % themeBorders.length];
+
+    return Container(
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: themeGradients[themeIdx % themeGradients.length],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(color: activeBorder, width: 1.8),
       ),
       child: Column(
         children: [
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              const Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      '🃏 تحدي الذاكرة البصرية والتركيز الهادئ',
-                      style: TextStyle(
-                        fontSize: 17,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.white,
-                      ),
-                    ),
-                    SizedBox(height: 4),
-                    Text(
-                      'اقلب البطاقات وتذكر أماكن الصور المتشابهة لتقوية الذاكرة!',
-                      style: TextStyle(fontSize: 12, color: Colors.white70),
-                    ),
-                  ],
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                decoration: BoxDecoration(
+                  color: activeBorder.withOpacity(0.22),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Text(
+                  '🔍 $category — السؤال ${idx + 1} من ${_oddOneOutQuestions.length}',
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.bold,
+                    color: activeBorder,
+                  ),
                 ),
               ),
-              OutlinedButton.icon(
-                onPressed: _initMemoryGame,
-                icon: const Icon(Icons.refresh, size: 16),
-                label: const Text('جولة جديدة'),
+              IconButton(
+                onPressed: () => CalmVoiceService.instance.speakCalmly(title),
+                icon: Icon(Icons.volume_up_rounded, color: activeBorder),
               ),
             ],
           ),
-          const SizedBox(height: 12),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-            children: [
-              Chip(
-                backgroundColor: const Color(0xFF0F172A),
-                label: Text('المحاولات: $_memoryMoves'),
-              ),
-              Chip(
-                backgroundColor: const Color(0xFF0F172A),
-                label: Text(
-                    'التطابقات: $_memoryMatches / ${_memoryBoard.length ~/ 2}'),
-              ),
-            ],
+          const SizedBox(height: 8),
+          LinearProgressIndicator(
+            value: (idx + 1) / _oddOneOutQuestions.length,
+            backgroundColor: Colors.white12,
+            color: activeBorder,
+            minHeight: 6,
+            borderRadius: BorderRadius.circular(8),
           ),
           const SizedBox(height: 12),
+          Text(
+            title,
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.bold,
+              color: Colors.white,
+            ),
+          ),
+          const SizedBox(height: 18),
           GridView.builder(
             shrinkWrap: true,
             physics: const NeverScrollableScrollPhysics(),
             gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-              crossAxisCount: 4,
-              mainAxisSpacing: 10,
-              crossAxisSpacing: 10,
-              childAspectRatio: 1.0,
+              crossAxisCount: 2,
+              mainAxisSpacing: 12,
+              crossAxisSpacing: 12,
+              childAspectRatio: 1.45,
             ),
-            itemCount: _memoryBoard.length,
-            itemBuilder: (ctx, index) {
-              final bool isUp =
-                  _memoryRevealed[index] || _memorySolved[index];
-              final bool isSolved = _memorySolved[index];
+            itemCount: items.length,
+            itemBuilder: (ctx, i) {
+              final String itemEmoji = items[i];
+              final bool isHexagonTheme = themeIdx % 2 == 1;
               return GestureDetector(
-                onTap: () => _onMemoryCardTap(index),
+                onTap: () async {
+                  if (itemEmoji == odd) {
+                    setState(() {
+                      _oddCorrect = true;
+                      _oddFeedback = '✅ ملاحظة ذكية جداً! $explanation';
+                    });
+                    await widget.appState.recordBrainGameWin(
+                      gameId: 'odd_one_out_$idx',
+                      gameTitle: 'قوة الملاحظة ($category)',
+                      earnedIqPoints: 15,
+                      earnedStars: 1,
+                    );
+                    CalmVoiceService.instance.speakCalmly(
+                      'أحسنت الملاحظة! $explanation',
+                    );
+                  } else {
+                    setState(() {
+                      _oddCorrect = false;
+                      _oddFeedback =
+                          '👀 هذا العنصر يشبه أصدقاءه في المجموعة، ابحث عن العنصر المختلف تماماً!';
+                    });
+                    CalmVoiceService.instance.speakCalmly(
+                      'انظر بدقة يا بطل وابحث عن الشكل المختلف عن المجموعة.',
+                    );
+                  }
+                },
                 child: AnimatedContainer(
                   duration: const Duration(milliseconds: 220),
                   decoration: BoxDecoration(
-                    color: isSolved
-                        ? const Color(0xFF14B8A6).withOpacity(0.3)
-                        : isUp
-                            ? const Color(0xFF334155)
-                            : const Color(0xFF0F172A),
-                    borderRadius: BorderRadius.circular(16),
+                    gradient: LinearGradient(
+                      colors: [
+                        const Color(0xFF0F172A),
+                        activeBorder.withOpacity(0.15),
+                      ],
+                    ),
+                    borderRadius: BorderRadius.circular(isHexagonTheme ? 34 : 18),
                     border: Border.all(
-                      color: isSolved
-                          ? const Color(0xFF14B8A6)
-                          : isUp
-                              ? const Color(0xFFF59E0B)
-                              : Colors.white24,
+                      color: activeBorder.withOpacity(0.65),
                       width: 2,
                     ),
+                    boxShadow: [
+                      BoxShadow(
+                        color: activeBorder.withOpacity(0.15),
+                        blurRadius: 8,
+                        offset: const Offset(0, 4),
+                      ),
+                    ],
                   ),
                   child: Center(
                     child: Text(
-                      isUp ? _memoryBoard[index] : '❓',
-                      style: const TextStyle(fontSize: 30),
+                      itemEmoji,
+                      style: const TextStyle(fontSize: 44),
                     ),
                   ),
                 ),
               );
             },
+          ),
+          if (_oddFeedback != null) ...[
+            const SizedBox(height: 14),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.black26,
+                borderRadius: BorderRadius.circular(14),
+              ),
+              child: Text(
+                _oddFeedback!,
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontWeight: FontWeight.bold,
+                  color: _oddCorrect
+                      ? const Color(0xFF14B8A6)
+                      : const Color(0xFFF59E0B),
+                ),
+              ),
+            ),
+          ],
+          const SizedBox(height: 16),
+          Row(
+            children: [
+              Expanded(
+                child: ElevatedButton.icon(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: activeBorder,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                  ),
+                  onPressed: () {
+                    setState(() {
+                      _oddQuestionIndex++;
+                      _oddCorrect = false;
+                      _oddFeedback = null;
+                    });
+                  },
+                  icon: const Icon(Icons.navigate_next),
+                  label: Text(
+                    'التحدي التالي (${((idx + 1) % _oddOneOutQuestions.length) + 1}/${_oddOneOutQuestions.length})',
+                    style: const TextStyle(fontWeight: FontWeight.bold),
+                  ),
+                ),
+              ),
+            ],
           ),
         ],
       ),
@@ -8023,7 +9740,8 @@ class _BrainGamesHubScreenState extends State<BrainGamesHubScreen> {
   }
 
   Widget _buildPatternLogicGame() {
-    final q = _patternQuestions[_patternQuestionIndex % _patternQuestions.length];
+    final int idx = _patternQuestionIndex % _patternQuestions.length;
+    final q = _patternQuestions[idx];
     final List<String> seq = List<String>.from(q['sequence'] as List);
     final List<String> opts = List<String>.from(q['options'] as List);
     final String ans = q['answer'] as String;
@@ -8034,7 +9752,7 @@ class _BrainGamesHubScreenState extends State<BrainGamesHubScreen> {
       decoration: BoxDecoration(
         color: const Color(0xFF1E293B),
         borderRadius: BorderRadius.circular(22),
-        border: Border.all(color: const Color(0xFFF59E0B).withOpacity(0.5)),
+        border: Border.all(color: const Color(0xFFF59E0B).withOpacity(0.6)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.center,
@@ -8042,10 +9760,11 @@ class _BrainGamesHubScreenState extends State<BrainGamesHubScreen> {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              const Expanded(
+              Expanded(
                 child: Text(
-                  '🧩 مختبر المنطق واستنتاج الأنماط',
-                  style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold),
+                  '🧩 مختبر المنطق (${idx + 1} من ${_patternQuestions.length})',
+                  style: const TextStyle(
+                      fontSize: 17, fontWeight: FontWeight.bold),
                 ),
               ),
               IconButton(
@@ -8072,7 +9791,8 @@ class _BrainGamesHubScreenState extends State<BrainGamesHubScreen> {
               alignment: WrapAlignment.center,
               spacing: 10,
               children: [
-                ...seq.map((s) => Text(s, style: const TextStyle(fontSize: 32))),
+                ...seq.map(
+                    (s) => Text(s, style: const TextStyle(fontSize: 32))),
                 Container(
                   padding:
                       const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
@@ -8113,13 +9833,13 @@ class _BrainGamesHubScreenState extends State<BrainGamesHubScreen> {
                           '✅ تفكير منطقي عبقري! الإجابة ($option) صحيحة تماماً (+15 نقطة ذكاء)';
                     });
                     await widget.appState.recordBrainGameWin(
-                      gameId: 'pattern_logic',
+                      gameId: 'pattern_logic_$idx',
                       gameTitle: 'مختبر المنطق والأنماط',
                       earnedIqPoints: 15,
                       earnedStars: 1,
                     );
                     CalmVoiceService.instance.speakCalmly(
-                      'أحسنت التفكير المنطقي يا بطل! إجابتك صحيحة وحصلت على خمس عشرة نقطة ذكاء!',
+                      'أحسنت التفكير المنطقي يا بطل! إجابتك صحيحة!',
                     );
                   } else {
                     setState(() {
@@ -8176,7 +9896,118 @@ class _BrainGamesHubScreenState extends State<BrainGamesHubScreen> {
     );
   }
 
+  Widget _buildMemoryMatchGame() {
+    return Container(
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1E293B),
+        borderRadius: BorderRadius.circular(22),
+        border: Border.all(color: const Color(0xFF14B8A6).withOpacity(0.5)),
+      ),
+      child: Column(
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      '🃏 تحدي الذاكرة البصرية — المستوى $_memoryLevel',
+                      style: const TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.white,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    const Text(
+                      'طابق البطاقات المتشابهة لتقوية الذاكرة والتركيز البصري!',
+                      style: TextStyle(fontSize: 12, color: Colors.white70),
+                    ),
+                  ],
+                ),
+              ),
+              OutlinedButton.icon(
+                onPressed: () {
+                  setState(() {
+                    _memoryLevel = (_memoryLevel % 3) + 1;
+                  });
+                  _initMemoryGame();
+                },
+                icon: const Icon(Icons.layers_outlined, size: 16),
+                label: const Text('تغيير المجموعة'),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+            children: [
+              Chip(
+                backgroundColor: const Color(0xFF0F172A),
+                label: Text('المحاولات: $_memoryMoves'),
+              ),
+              Chip(
+                backgroundColor: const Color(0xFF0F172A),
+                label: Text(
+                    'التطابقات: $_memoryMatches / ${_memoryBoard.length ~/ 2}'),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          GridView.builder(
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+              crossAxisCount: 4,
+              mainAxisSpacing: 10,
+              crossAxisSpacing: 10,
+              childAspectRatio: 1.0,
+            ),
+            itemCount: _memoryBoard.length,
+            itemBuilder: (ctx, index) {
+              final bool isUp =
+                  _memoryRevealed[index] || _memorySolved[index];
+              final bool isSolved = _memorySolved[index];
+              return GestureDetector(
+                onTap: () => _onMemoryCardTap(index),
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 220),
+                  decoration: BoxDecoration(
+                    color: isSolved
+                        ? const Color(0xFF14B8A6).withOpacity(0.3)
+                        : isUp
+                            ? const Color(0xFF334155)
+                            : const Color(0xFF0F172A),
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(
+                      color: isSolved
+                          ? const Color(0xFF14B8A6)
+                          : isUp
+                              ? const Color(0xFFF59E0B)
+                              : Colors.white24,
+                      width: 2,
+                    ),
+                  ),
+                  child: Center(
+                    child: Text(
+                      isUp ? _memoryBoard[index] : '🌟',
+                      style: const TextStyle(fontSize: 30),
+                    ),
+                  ),
+                ),
+              );
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildVisualMathGame() {
+    final bool isAdd = _mathMode == 'add';
     return Container(
       padding: const EdgeInsets.all(18),
       decoration: BoxDecoration(
@@ -8189,15 +10020,20 @@ class _BrainGamesHubScreenState extends State<BrainGamesHubScreen> {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              const Expanded(
+              Expanded(
                 child: Text(
-                  '🔢 مغامرة الحساب والعدّ البصري الهادئ',
-                  style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold),
+                  isAdd
+                      ? '🔢 تحدي الجمع المصور — الجولة $_mathRoundNumber'
+                      : '🔢 مغامرة العدّ البصري — الجولة $_mathRoundNumber',
+                  style: const TextStyle(
+                      fontSize: 16, fontWeight: FontWeight.bold),
                 ),
               ),
               IconButton(
                 onPressed: () => CalmVoiceService.instance.speakCalmly(
-                  'عدّ الأشكال بهدوء يا بطل ثم اختر الرقم الصحيح!',
+                  isAdd
+                      ? 'اجمع المجموعتين معاً يا بطل: $_mathAddendA زائد $_mathAddendB يساوي كم؟'
+                      : 'عدّ الأشكال بهدوء يا بطل ثم اختر الرقم الصحيح!',
                 ),
                 icon: const Icon(Icons.volume_up_rounded,
                     color: Color(0xFF38BDF8)),
@@ -8205,28 +10041,68 @@ class _BrainGamesHubScreenState extends State<BrainGamesHubScreen> {
             ],
           ),
           const SizedBox(height: 8),
-          const Text(
-            'عدّ العناصر الموجودة داخل الصندوق واختر العدد الصحيح:',
-            style: TextStyle(fontSize: 13, color: Colors.white70),
+          Text(
+            isAdd
+                ? 'اجمع العناصر في المجموعتين ($_mathAddendA + $_mathAddendB) واختر الناتج الصحيح:'
+                : 'عدّ العناصر الموجودة داخل الصندوق واختر العدد الصحيح:',
+            style: const TextStyle(fontSize: 13, color: Colors.white70),
           ),
           const SizedBox(height: 16),
           Container(
             width: double.infinity,
-            padding: const EdgeInsets.all(20),
+            padding: const EdgeInsets.all(18),
             decoration: BoxDecoration(
               color: const Color(0xFF0F172A),
               borderRadius: BorderRadius.circular(18),
               border: Border.all(color: Colors.white12),
             ),
-            child: Wrap(
-              alignment: WrapAlignment.center,
-              spacing: 14,
-              runSpacing: 14,
-              children: List.generate(
-                _mathTargetCount,
-                (_) => Text(_mathEmoji, style: const TextStyle(fontSize: 38)),
-              ),
-            ),
+            child: isAdd
+                ? Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                    children: [
+                      Flexible(
+                        child: Wrap(
+                          alignment: WrapAlignment.center,
+                          spacing: 6,
+                          runSpacing: 6,
+                          children: List.generate(
+                            _mathAddendA,
+                            (_) => Text(_mathEmoji,
+                                style: const TextStyle(fontSize: 30)),
+                          ),
+                        ),
+                      ),
+                      const Text(
+                        '➕',
+                        style: TextStyle(
+                            fontSize: 28,
+                            fontWeight: FontWeight.bold,
+                            color: Color(0xFFF59E0B)),
+                      ),
+                      Flexible(
+                        child: Wrap(
+                          alignment: WrapAlignment.center,
+                          spacing: 6,
+                          runSpacing: 6,
+                          children: List.generate(
+                            _mathAddendB,
+                            (_) => Text(_mathEmoji,
+                                style: const TextStyle(fontSize: 30)),
+                          ),
+                        ),
+                      ),
+                    ],
+                  )
+                : Wrap(
+                    alignment: WrapAlignment.center,
+                    spacing: 14,
+                    runSpacing: 14,
+                    children: List.generate(
+                      _mathTargetCount,
+                      (_) => Text(_mathEmoji,
+                          style: const TextStyle(fontSize: 36)),
+                    ),
+                  ),
           ),
           const SizedBox(height: 18),
           Wrap(
@@ -8249,18 +10125,18 @@ class _BrainGamesHubScreenState extends State<BrainGamesHubScreen> {
                     if (!_mathAnswered) {
                       _mathAnswered = true;
                       await widget.appState.recordBrainGameWin(
-                        gameId: 'visual_math',
-                        gameTitle: 'مغامرة الحساب والعدّ البصري',
+                        gameId: 'visual_math_$_mathRoundNumber',
+                        gameTitle: 'الحساب والجمع البصري',
                         earnedIqPoints: 15,
                         earnedStars: 1,
                       );
                     }
                     setState(() {
                       _mathFeedback =
-                          '🎉 أحسنت العدّ! العدد الصحيح هو ($numOpt) (+15 نقطة ذكاء)';
+                          '🎉 عبقري في الحساب! الناتج الصحيح هو ($numOpt) (+15 نقطة ذكاء)';
                     });
                     CalmVoiceService.instance.speakCalmly(
-                      'رائع يا بطل الحساب! العدد هو $numOpt، إجابة صحيحة!',
+                      'رائع يا بطل الحساب! الإجابة هي $numOpt!',
                     );
                   } else {
                     setState(() {
@@ -8297,10 +10173,13 @@ class _BrainGamesHubScreenState extends State<BrainGamesHubScreen> {
                 backgroundColor: const Color(0xFF38BDF8),
                 foregroundColor: Colors.black87,
               ),
-              onPressed: _generateMathRound,
-              icon: const Icon(Icons.refresh),
+              onPressed: () {
+                _mathRoundNumber++;
+                _generateMathRound();
+              },
+              icon: const Icon(Icons.navigate_next),
               label: const Text(
-                'مسألة عدّ جديدة',
+                'مسألة الحساب التالية',
                 style: TextStyle(fontWeight: FontWeight.bold),
               ),
             ),
@@ -8311,8 +10190,8 @@ class _BrainGamesHubScreenState extends State<BrainGamesHubScreen> {
   }
 
   Widget _buildArabicWordBuilderGame() {
-    final q =
-        _arabicWordQuestions[_wordQuestionIndex % _arabicWordQuestions.length];
+    final int idx = _wordQuestionIndex % _arabicWordQuestions.length;
+    final q = _arabicWordQuestions[idx];
     final String emoji = q['emoji'] as String;
     final String fullWord = q['word'] as String;
     final String missingDisplay = q['missingDisplay'] as String;
@@ -8332,10 +10211,11 @@ class _BrainGamesHubScreenState extends State<BrainGamesHubScreen> {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              const Expanded(
+              Expanded(
                 child: Text(
-                  '🔤 تركيب الحروف والذكاء اللغوي العربي',
-                  style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold),
+                  '🔤 الذكاء اللغوي (${idx + 1} من ${_arabicWordQuestions.length})',
+                  style: const TextStyle(
+                      fontSize: 17, fontWeight: FontWeight.bold),
                 ),
               ),
               IconButton(
@@ -8395,8 +10275,8 @@ class _BrainGamesHubScreenState extends State<BrainGamesHubScreen> {
                           '✅ أحسنت يا فصيح! حرف ($letter) يكمل كلمة ($fullWord) (+15 نقطة ذكاء)';
                     });
                     await widget.appState.recordBrainGameWin(
-                      gameId: 'arabic_word_builder',
-                      gameTitle: 'تركيب الحروف والذكاء اللغوي',
+                      gameId: 'arabic_word_$idx',
+                      gameTitle: 'الذكاء اللغوي ($fullWord)',
                       earnedIqPoints: 15,
                       earnedStars: 1,
                     );
@@ -8451,134 +10331,6 @@ class _BrainGamesHubScreenState extends State<BrainGamesHubScreen> {
               icon: const Icon(Icons.navigate_next),
               label: const Text(
                 'الكلمة العربية التالية',
-                style: TextStyle(fontWeight: FontWeight.bold),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildOddOneOutGame() {
-    final q =
-        _oddOneOutQuestions[_oddQuestionIndex % _oddOneOutQuestions.length];
-    final String title = q['title'] as String;
-    final List<String> items = List<String>.from(q['items'] as List);
-    final String odd = q['odd'] as String;
-    final String explanation = q['explanation'] as String;
-
-    return Container(
-      padding: const EdgeInsets.all(18),
-      decoration: BoxDecoration(
-        color: const Color(0xFF1E293B),
-        borderRadius: BorderRadius.circular(22),
-        border: Border.all(color: const Color(0xFFEC4899).withOpacity(0.5)),
-      ),
-      child: Column(
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              const Expanded(
-                child: Text(
-                  '🔍 قوة الملاحظة والتصنيف الذكي',
-                  style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold),
-                ),
-              ),
-              IconButton(
-                onPressed: () => CalmVoiceService.instance.speakCalmly(title),
-                icon: const Icon(Icons.volume_up_rounded,
-                    color: Color(0xFFEC4899)),
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          Text(
-            title,
-            textAlign: TextAlign.center,
-            style: const TextStyle(fontSize: 14, color: Colors.white70),
-          ),
-          const SizedBox(height: 18),
-          Wrap(
-            spacing: 14,
-            runSpacing: 14,
-            alignment: WrapAlignment.center,
-            children: items.map((itemEmoji) {
-              return GestureDetector(
-                onTap: () async {
-                  if (itemEmoji == odd) {
-                    setState(() {
-                      _oddCorrect = true;
-                      _oddFeedback = '✅ ملاحظة ذكية جداً! $explanation';
-                    });
-                    await widget.appState.recordBrainGameWin(
-                      gameId: 'odd_one_out',
-                      gameTitle: 'قوة الملاحظة والتصنيف الذكي',
-                      earnedIqPoints: 15,
-                      earnedStars: 1,
-                    );
-                    CalmVoiceService.instance.speakCalmly(
-                      'أحسنت الملاحظة! $explanation',
-                    );
-                  } else {
-                    setState(() {
-                      _oddCorrect = false;
-                      _oddFeedback =
-                          '👀 هذا العنصر يشبه أصدقاءه في المجموعة، ابحث عن العنصر المختلف تماماً!';
-                    });
-                    CalmVoiceService.instance.speakCalmly(
-                      'انظر بدقة يا بطل وابحث عن الشكل المختلف عن المجموعة.',
-                    );
-                  }
-                },
-                child: Container(
-                  width: 78,
-                  height: 78,
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF0F172A),
-                    borderRadius: BorderRadius.circular(18),
-                    border: Border.all(color: Colors.white24, width: 1.5),
-                  ),
-                  child: Center(
-                    child:
-                        Text(itemEmoji, style: const TextStyle(fontSize: 38)),
-                  ),
-                ),
-              );
-            }).toList(),
-          ),
-          if (_oddFeedback != null) ...[
-            const SizedBox(height: 14),
-            Text(
-              _oddFeedback!,
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                fontWeight: FontWeight.bold,
-                color: _oddCorrect
-                    ? const Color(0xFF14B8A6)
-                    : const Color(0xFFF59E0B),
-              ),
-            ),
-          ],
-          const SizedBox(height: 16),
-          SizedBox(
-            width: double.infinity,
-            child: ElevatedButton.icon(
-              style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFFEC4899),
-                foregroundColor: Colors.white,
-              ),
-              onPressed: () {
-                setState(() {
-                  _oddQuestionIndex++;
-                  _oddCorrect = false;
-                  _oddFeedback = null;
-                });
-              },
-              icon: const Icon(Icons.navigate_next),
-              label: const Text(
-                'تحدي الملاحظة التالي',
                 style: TextStyle(fontWeight: FontWeight.bold),
               ),
             ),
