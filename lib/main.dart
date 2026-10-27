@@ -1648,8 +1648,7 @@ class AppStateManager extends ChangeNotifier {
       notifyListeners();
       return PaymentVerificationOutcome(
         isPaidAndVerified: false,
-        message: '❌ فشل التحقق من الدفع: $reason
-لم يتم تفعيل الباقة المختارة.',
+        message: '❌ فشل التحقق من الدفع: $reason — لم يتم تفعيل الباقة المختارة.',
         transaction: failedTx,
       );
     }
