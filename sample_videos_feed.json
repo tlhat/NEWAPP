@@ -1,0 +1,82 @@
+{
+  "app": "Haneen Kids VOD",
+  "version": 2,
+  "updatedAt": "2026-10-27T17:00:00Z",
+  "videos": [
+    {
+      "id": "v1",
+      "playlistId": "bedtime",
+      "categoryLabel": "🌙 قصص الهدوء قبل النوم",
+      "ageRange": "3–6 سنوات",
+      "title": "فارس ونور يراقبان الهلال المبتسم",
+      "subtitle": "«في المساء الهادئ، جلس فارس وأخته نور قرب النافذة يتأملان الهلال المبتسم في السماء الصافية...»",
+      "interactivePhrase": "«تُصْبِحُونَ عَلَى خَيْرٍ يَا أَصْدِقَائِي»",
+      "offlineActivity": "انظر من النافذة مع ماما أو بابا قبل النوم، وابحث عن القمر، ثم خذ 3 أنفاس عميقة وهادئة.",
+      "streamUrl": "https://flutter.github.io/assets-for-api-docs/assets/videos/butterfly.mp4",
+      "bgGradientStart": "#1E1B4B",
+      "bgGradientEnd": "#0F172A",
+      "emoji": "🌙",
+      "likes": 142
+    },
+    {
+      "id": "v2",
+      "playlistId": "habits",
+      "categoryLabel": "🧸 يوميات الآداب والسلوك الحسن",
+      "ageRange": "3–7 سنوات",
+      "title": "سلة الألعاب السعيدة مع أرنوب",
+      "subtitle": "«ابتسم فارس وقال لنور: هيا نلعب لعبة الترتيب الهادئ! أنا أضع السيارات في السلة، وأنتِ تضعين المكعبات.»",
+      "interactivePhrase": "«أَنَا أُرَتِّبُ أَلْعَابِي بِنَفْسِي»",
+      "offlineActivity": "اذهب الآن واجمع 3 ألعاب من غرفتك وضعها في مكانها الصحيح مثل فارس ونور لتحصل على نجمة البطل!",
+      "streamUrl": "https://flutter.github.io/assets-for-api-docs/assets/videos/bee.mp4",
+      "bgGradientStart": "#134E4A",
+      "bgGradientEnd": "#0F172A",
+      "emoji": "🧸",
+      "likes": 198
+    },
+    {
+      "id": "v3",
+      "playlistId": "science",
+      "categoryLabel": "🦋 لماذا وكيف؟ (عجائب الطبيعة)",
+      "ageRange": "4–8 سنوات",
+      "title": "سر أجنحة الفراشة الملونة في الحديقة",
+      "subtitle": "«في البستان الأخضر الهادئ، أمسك فارس عدسته المكبرة واقترب بهدوء شديد ليرى فراشة تقف على زهرة وردية...»",
+      "interactivePhrase": "«سُبْحَانَ اللَّهِ، مَا أَجْمَلَ الْفَرَاشَةَ!»",
+      "offlineActivity": "حرك يديك ببطء شديد مثل أجنحة الفراشة الهادئة 5 مرات، واذكر لونين رأيتهما على جناح الفراشة.",
+      "streamUrl": "https://flutter.github.io/assets-for-api-docs/assets/videos/butterfly.mp4",
+      "bgGradientStart": "#064E3B",
+      "bgGradientEnd": "#0F172A",
+      "emoji": "🦋",
+      "likes": 215
+    },
+    {
+      "id": "v4",
+      "playlistId": "arabic",
+      "categoryLabel": "🗣️ انطلق وتكلم بالعربية",
+      "ageRange": "2–6 سنوات",
+      "title": "كلمات الصباح والمساء باللغة العربية الفصحى",
+      "subtitle": "«عندما تشرق الشمس الدافئة في الصباح، نبتسم ونقول بصوت واضح وجميل: صَبَاحُ الْخَيْرِ!»",
+      "interactivePhrase": "«صَبَاحُ الْخَيْرِ يَا أُمِّي، مَسَاءُ النُّورِ يَا أَبِي»",
+      "offlineActivity": "اذهب الآن إلى ماما أو بابا وقل بصوت عربي واضح وجميل: «شكراً لك، أنا أحبك كثيراً!»",
+      "streamUrl": "https://flutter.github.io/assets-for-api-docs/assets/videos/bee.mp4",
+      "bgGradientStart": "#312E81",
+      "bgGradientEnd": "#0F172A",
+      "emoji": "🗣️",
+      "likes": 176
+    },
+    {
+      "id": "v5",
+      "playlistId": "crafts",
+      "categoryLabel": "🎨 افعلها بيدك وحرك جسمك",
+      "ageRange": "4–8 سنوات",
+      "title": "بناء برج التوازن الخشبي وتمرين التنفس",
+      "subtitle": "«نأخذ شهيقاً عميقاً من الأنف مثل شم زهرة جميلة.. ثم نخرج الهواء ببطء، ونضع المكعب الثاني فوق الأول.»",
+      "interactivePhrase": "«يَدِي ثَابِتَةٌ وَعَقْلِي هَادِئٌ»",
+      "offlineActivity": "أغلق الشاشة الآن، وحاول وضع 5 مكعبات أو كتب فوق بعضها بهدوء تام دون أن تسقط!",
+      "streamUrl": "https://flutter.github.io/assets-for-api-docs/assets/videos/butterfly.mp4",
+      "bgGradientStart": "#78350F",
+      "bgGradientEnd": "#0F172A",
+      "emoji": "🎨",
+      "likes": 164
+    }
+  ]
+}
