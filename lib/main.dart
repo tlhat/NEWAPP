@@ -1921,6 +1921,7 @@ class ChildProfile {
   String remoteLockReasonMessage;
   String currentLiveStatus;
   String familyPairingCode;
+  String lastActiveAcademyLessonId;
   bool allowMicrophone;
   bool allowExternalVideos;
   bool offlineOnlyMode;
@@ -1952,6 +1953,7 @@ class ChildProfile {
         'تم قفل شاشة التطبيق الآن من هاتف ولي الأمر. حان وقت الراحة أو اللعب الواقعي يا بطل!',
     this.currentLiveStatus = 'متصل — يتصفح أكاديمية وقصص حنين',
     this.familyPairingCode = 'HK-8824',
+    this.lastActiveAcademyLessonId = 'les_arabic_alif',
     this.allowMicrophone = true,
     this.allowExternalVideos = true,
     this.offlineOnlyMode = false,
@@ -2030,6 +2032,8 @@ class ChildProfile {
           (json['currentLiveStatus'] ?? 'متصل — يتعلم في أكاديمية حنين')
               .toString(),
       familyPairingCode: (json['familyPairingCode'] ?? 'HK-8824').toString(),
+      lastActiveAcademyLessonId:
+          (json['lastActiveAcademyLessonId'] ?? 'les_arabic_alif').toString(),
       allowMicrophone: json['allowMicrophone'] != false,
       allowExternalVideos: json['allowExternalVideos'] != false,
       offlineOnlyMode: json['offlineOnlyMode'] == true,
@@ -2085,6 +2089,7 @@ class ChildProfile {
       'remoteLockReasonMessage': remoteLockReasonMessage,
       'currentLiveStatus': currentLiveStatus,
       'familyPairingCode': familyPairingCode,
+      'lastActiveAcademyLessonId': lastActiveAcademyLessonId,
       'allowMicrophone': allowMicrophone,
       'allowExternalVideos': allowExternalVideos,
       'offlineOnlyMode': offlineOnlyMode,
@@ -2622,6 +2627,9 @@ class ParentAccount {
       orElse: () => children.first,
     );
   }
+
+  bool get isGuestDemoSession =>
+      authProvider == 'demo' || authProvider == 'guest';
 
   bool get isTrialPlan => subscriptionPlanId == 'trial_1day';
 
@@ -3992,12 +4000,22 @@ class AppStateManager extends ChangeNotifier {
     }
   }
 
+  Future<void> setLastActiveAcademyLesson(String lessonId) async {
+    if (currentAccount == null || lessonId.trim().isEmpty) return;
+    currentAccount!.activeChild.lastActiveAcademyLessonId = lessonId.trim();
+    await _saveAccounts();
+    notifyListeners();
+  }
+
   Future<bool> completeAcademyLesson({
     required String lessonId,
     required String lessonTitle,
     required String learnedWord,
     int rewardStars = 2,
   }) async {
+    if (currentAccount != null) {
+      currentAccount!.activeChild.lastActiveAcademyLessonId = lessonId;
+    }
     if (currentAccount == null) return false;
     final child = currentAccount!.activeChild;
     final String lockKey = '${child.id}_lesson_$lessonId';
@@ -5847,6 +5865,14 @@ class _MultiChildProfilesScreenState extends State<MultiChildProfilesScreen> {
     return Scaffold(
       appBar: AppBar(
         backgroundColor: const Color(0xFF1E293B),
+        leading: account.isGuestDemoSession
+            ? IconButton(
+                tooltip: 'الرجوع لصفحة البداية وتسجيل الدخول',
+                icon: const Icon(Icons.arrow_back_rounded,
+                    color: Color(0xFFF59E0B)),
+                onPressed: () => widget.appState.logout(),
+              )
+            : null,
         title: const Text(
           'من سيشاهد قصص حنين اليوم؟',
           style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
@@ -5900,6 +5926,7 @@ class _MultiChildProfilesScreenState extends State<MultiChildProfilesScreen> {
                     ],
                   ),
                 ),
+                if (!account.isGuestDemoSession) ...[
                 const SizedBox(height: 10),
                 GestureDetector(
                   onTap: () {
@@ -6046,6 +6073,7 @@ class _MultiChildProfilesScreenState extends State<MultiChildProfilesScreen> {
                     ),
                   ),
                 ),
+                ],
                 const SizedBox(height: 14),
                 Text(
                   'مرحباً بك يا ${account.fullName} 👋 اختر ملف الطفل للبدء أو أضف طفلاً جديداً:',
@@ -7117,6 +7145,7 @@ class _VerticalVideoFeedPlayerScreenState
                       _openRealWorldHeroActivityModal(item),
                   onVoiceAssistantTap: _openSmartVoiceAssistantModal,
                   onBrainGamesTap: _openBrainGamesHub,
+                  onAcademyTap: () => _openHaneenAcademy(initialTab: 0),
                 );
               },
             ),
@@ -7137,6 +7166,36 @@ class _VerticalVideoFeedPlayerScreenState
                       const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
                   child: Row(
                     children: [
+                      if (account.isGuestDemoSession) ...[
+                        GestureDetector(
+                          onTap: () => widget.appState.logout(),
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 8, vertical: 4),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFF59E0B).withOpacity(0.9),
+                              borderRadius: BorderRadius.circular(16),
+                            ),
+                            child: const Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(Icons.arrow_back_rounded,
+                                    size: 13, color: Colors.black87),
+                                SizedBox(width: 3),
+                                Text(
+                                  'البداية',
+                                  style: TextStyle(
+                                    fontSize: 10.5,
+                                    fontWeight: FontWeight.bold,
+                                    color: Colors.black87,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 4),
+                      ],
                       GestureDetector(
                         onTap: widget.appState.openChildProfilesScreen,
                         child: Container(
@@ -7294,34 +7353,36 @@ class _VerticalVideoFeedPlayerScreenState
                           ),
                         ),
                       ),
-                      const SizedBox(width: 4),
-                      GestureDetector(
-                        onTap: () => _openParentalGateDialog(initialTab: 0),
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 8, vertical: 4),
-                          decoration: BoxDecoration(
-                            color: const Color(0xFF14B8A6).withOpacity(0.85),
-                            borderRadius: BorderRadius.circular(16),
-                          ),
-                          child: const Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Icon(Icons.lock_outline,
-                                  size: 12, color: Colors.white),
-                              SizedBox(width: 3),
-                              Text(
-                                'الوالدين',
-                                style: TextStyle(
-                                  fontSize: 10.5,
-                                  fontWeight: FontWeight.bold,
-                                  color: Colors.white,
+                      if (!account.isGuestDemoSession) ...[
+                        const SizedBox(width: 4),
+                        GestureDetector(
+                          onTap: () => _openParentalGateDialog(initialTab: 0),
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 8, vertical: 4),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF14B8A6).withOpacity(0.85),
+                              borderRadius: BorderRadius.circular(16),
+                            ),
+                            child: const Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(Icons.lock_outline,
+                                    size: 12, color: Colors.white),
+                                SizedBox(width: 3),
+                                Text(
+                                  'الوالدين',
+                                  style: TextStyle(
+                                    fontSize: 10.5,
+                                    fontWeight: FontWeight.bold,
+                                    color: Colors.white,
+                                  ),
                                 ),
-                              ),
-                            ],
+                              ],
+                            ),
                           ),
                         ),
-                      ),
+                      ],
                     ],
                   ),
                 ),
@@ -7669,6 +7730,7 @@ class VerticalVideoFeedItemWidget extends StatefulWidget {
   final VoidCallback onHeroActivityTap;
   final VoidCallback onVoiceAssistantTap;
   final VoidCallback onBrainGamesTap;
+  final VoidCallback? onAcademyTap;
 
   const VerticalVideoFeedItemWidget({
     super.key,
@@ -7679,6 +7741,7 @@ class VerticalVideoFeedItemWidget extends StatefulWidget {
     required this.onHeroActivityTap,
     required this.onVoiceAssistantTap,
     required this.onBrainGamesTap,
+    this.onAcademyTap,
   });
 
   @override
@@ -8122,6 +8185,15 @@ class _VerticalVideoFeedItemWidgetState
                     onTap: widget.onHeroActivityTap,
                   ),
                   const SizedBox(height: 8),
+                  if (widget.onAcademyTap != null) ...[
+                    _SideActionButton(
+                      icon: Icons.school_rounded,
+                      iconColor: const Color(0xFF10B981),
+                      label: 'أكاديمية حنين',
+                      onTap: widget.onAcademyTap!,
+                    ),
+                    const SizedBox(height: 8),
+                  ],
                   _SideActionButton(
                     icon: Icons.psychology_rounded,
                     iconColor: const Color(0xFFC084FC),
@@ -14889,6 +14961,7 @@ class AcademyTrackLessonModel {
   final String introductionText;
   final String targetWordOrPhrase;
   final String interactivePrompt;
+  final List<Map<String, String>> interactiveVisualCards;
   final String quizQuestion;
   final List<String> quizOptions;
   final String correctOption;
@@ -14907,6 +14980,7 @@ class AcademyTrackLessonModel {
     required this.introductionText,
     required this.targetWordOrPhrase,
     required this.interactivePrompt,
+    required this.interactiveVisualCards,
     required this.quizQuestion,
     required this.quizOptions,
     required this.correctOption,
@@ -14926,12 +15000,17 @@ const List<AcademyTrackLessonModel> kHaneenAcademyCurriculum = [
     title: 'حرف الألف (أ) — أَسَدٌ وَأَرْنَبٌ',
     illustrationEmoji: '🦁🐰',
     introductionText:
-        'حرف الألف (أ) هو أول حروف لغتنا العربية الجميلة! نسمعه في أول كلمة (أَسَد) وكلمة (أَرْنَب).',
-    targetWordOrPhrase: 'أ — أَسَدٌ شُجَاعٌ ، أَرْنَبٌ سَرِيعٌ',
-    interactivePrompt: 'المس صورة الأرنب اللطيف وانطق حرف (أَ) بصوت واضح!',
-    quizQuestion: 'أي كلمة من هذه الكلمات تبدأ بحرف الألف (أ)؟',
-    quizOptions: ['أَرْنَبٌ 🐰', 'بَطَّةٌ 🦆', 'تُفَّاحَةٌ 🍎'],
-    correctOption: 'أَرْنَبٌ 🐰',
+        'حرف الألف (أ) هو أول حروف لغتنا العربية! المس الصور لتسمع صوت الحرف والكلمة.',
+    targetWordOrPhrase: 'أ — أَسَدٌ ، أَرْنَبٌ ، أَنَانَاسٌ',
+    interactivePrompt: 'المس كل صورة لتستمع إلى نطقها وترددها:',
+    interactiveVisualCards: [
+      {'emoji': '🦁', 'label': 'أَسَدٌ', 'speak': 'أَ ، أَسَدٌ شُجَاعٌ'},
+      {'emoji': '🐰', 'label': 'أَرْنَبٌ', 'speak': 'أَ ، أَرْنَبٌ سَرِيعٌ'},
+      {'emoji': '🍍', 'label': 'أَنَانَاسٌ', 'speak': 'أَ ، أَنَانَاسٌ لَذِيذٌ'},
+    ],
+    quizQuestion: 'أي صورة تبدأ بحرف الألف (أ)؟',
+    quizOptions: ['🐰 أَرْنَبٌ', '🦆 بَطَّةٌ', '🍎 تُفَّاحَةٌ'],
+    correctOption: '🐰 أَرْنَبٌ',
     rewardSticker: '🌟 وسام حرف الألف',
   ),
   AcademyTrackLessonModel(
@@ -14942,16 +15021,21 @@ const List<AcademyTrackLessonModel> kHaneenAcademyCurriculum = [
     accentColor: Color(0xFF14B8A6),
     ageSuitability: '2–6 سنوات',
     levelName: 'مبتدئ',
-    title: 'حرف الباء (ب) — بَطَّةٌ وَبَيْتٌ',
-    illustrationEmoji: '🦆🏠',
+    title: 'حرف الباء والتاء (ب ، ت) — بَطَّةٌ وَتُفَّاحَةٌ',
+    illustrationEmoji: '🦆🍎',
     introductionText:
-        'حرف الباء (ب) تحته نقطة واحدة جميلة! نسمعه في أول كلمة (بَطَّة) وكلمة (بَيْت).',
-    targetWordOrPhrase: 'ب — بَطَّةٌ تَسْبَحُ فِي المَاءِ',
-    interactivePrompt: 'ضع إصبعك تحت حرف الباء لتتذكر النقطة الواحدة!',
-    quizQuestion: 'أين توجد النقطة في حرف الباء (ب)؟',
-    quizOptions: ['تحت الحرف (ب)', 'فوق الحرف', 'بدون نقاط'],
-    correctOption: 'تحت الحرف (ب)',
-    rewardSticker: '🌟 وسام حرف الباء',
+        'حرف الباء (ب) تحته نقطة واحدة، وحرف التاء (ت) فوقه نقطتان جميلتان!',
+    targetWordOrPhrase: 'ب — بَطَّةٌ ، بَيْتٌ | ت — تُفَّاحَةٌ ، تَاجٌ',
+    interactivePrompt: 'المس البطاقات لتسمع الفرق بين صوت (ب) وصوت (ت):',
+    interactiveVisualCards: [
+      {'emoji': '🦆', 'label': 'بَطَّةٌ', 'speak': 'بَ ، بَطَّةٌ تَسْبَحُ'},
+      {'emoji': '🏠', 'label': 'بَيْتٌ', 'speak': 'بَ ، بَيْتٌ جَمِيلٌ'},
+      {'emoji': '🍎', 'label': 'تُفَّاحَةٌ', 'speak': 'تَ ، تُفَّاحَةٌ حَمْرَاءُ'},
+    ],
+    quizQuestion: 'أي كلمة تبدأ بحرف الباء (ب)؟',
+    quizOptions: ['🦆 بَطَّةٌ', '🦁 أَسَدٌ', '☀️ شَمْسٌ'],
+    correctOption: '🦆 بَطَّةٌ',
+    rewardSticker: '🌟 وسام الباء والتاء',
   ),
   AcademyTrackLessonModel(
     id: 'les_numbers_count',
@@ -14961,16 +15045,45 @@ const List<AcademyTrackLessonModel> kHaneenAcademyCurriculum = [
     accentColor: Color(0xFF38BDF8),
     ageSuitability: '2–6 سنوات',
     levelName: 'مبتدئ',
-    title: 'الأرقام (١ ، ٢ ، ٣) والمقارنة بين الكميات',
+    title: 'الأرقام (١ ، ٢ ، ٣) والعدّ بالصور',
     illustrationEmoji: '🍎🍎🍎',
     introductionText:
-        'هيا نعدّ التفاحات معاً: تفاحة واحدة (١)، تفاحتان اثنتان (٢)، ثلاث تفاحات (٣)! الثلاثة أكثر من الواحدة.',
+        'هيا نعدّ معاً بالصوت والصورة: واحد (١)، اثنان (٢)، ثلاثة (٣)!',
     targetWordOrPhrase: 'وَاحِدٌ (١) ، اِثْنَانِ (٢) ، ثَلَاثَةٌ (٣)',
-    interactivePrompt: 'عدّ على أصابع يدك من ١ إلى ٣!',
-    quizQuestion: 'أي سلة تحتوي على ثلاث (٣) تفاحات؟',
+    interactivePrompt: 'اضغط على كل رقم لتسمع اسمه وتعدّ العناصر:',
+    interactiveVisualCards: [
+      {'emoji': '1️⃣🍎', 'label': 'وَاحِد (١)', 'speak': 'وَاحِد ، تُفَّاحَةٌ وَاحِدَةٌ'},
+      {'emoji': '2️⃣🍎', 'label': 'اِثْنَان (٢)', 'speak': 'اِثْنَان ، تُفَّاحَتَانِ اثْنَتَانِ'},
+      {'emoji': '3️⃣🍎', 'label': 'ثَلَاثَة (٣)', 'speak': 'ثَلَاثَة ، ثَلَاثُ تُفَّاحَاتٍ'},
+    ],
+    quizQuestion: 'أي سلة فيها ثلاث (٣) تفاحات؟',
     quizOptions: ['🍎', '🍎🍎', '🍎🍎🍎'],
     correctOption: '🍎🍎🍎',
     rewardSticker: '🔢 وسام العدّ الذكي',
+  ),
+  AcademyTrackLessonModel(
+    id: 'les_numbers_compare',
+    trackId: 'numbers_counting',
+    trackTitle: '٢. الأرقام والعدّ',
+    trackIcon: '🔢',
+    accentColor: Color(0xFF38BDF8),
+    ageSuitability: '3–7 سنوات',
+    levelName: 'متوسط',
+    title: 'الأرقام (٤ ، ٥) والمقارنة: أكثر وأقل',
+    illustrationEmoji: '⭐⭐⭐⭐⭐',
+    introductionText:
+        'خمس نجوم (٥) أكثر من نجمتين (٢)! هيا نلمس البطاقات لنقارن بين الكميات.',
+    targetWordOrPhrase: 'أَرْبَعَةٌ (٤) ، خَمْسَةٌ (٥) — أَكْثَرُ وَأَقَلُّ',
+    interactivePrompt: 'المس البطاقات لتسمع المقارنة بين الأعداد:',
+    interactiveVisualCards: [
+      {'emoji': '⭐⭐⭐⭐', 'label': 'أَرْبَعَة (٤)', 'speak': 'أَرْبَعُ نُجُومٍ لَامِعَةٍ'},
+      {'emoji': '⭐⭐⭐⭐⭐', 'label': 'خَمْسَة (٥)', 'speak': 'خَمْسُ نُجُومٍ ، الخَمْسَةُ أَكْثَرُ'},
+      {'emoji': '⭐⭐', 'label': 'اِثْنَان (٢)', 'speak': 'نَجْمَتَانِ اثْنَتَانِ ، أَقَلُّ مِنَ الخَمْسَةِ'},
+    ],
+    quizQuestion: 'أي مجموعة تحتوي على نجوم أكثر؟',
+    quizOptions: ['⭐⭐⭐⭐⭐ (٥)', '⭐⭐ (٢)', '⭐ (١)'],
+    correctOption: '⭐⭐⭐⭐⭐ (٥)',
+    rewardSticker: '🔢 وسام المقارنة الرياضية',
   ),
   AcademyTrackLessonModel(
     id: 'les_colors_shapes',
@@ -14980,15 +15093,20 @@ const List<AcademyTrackLessonModel> kHaneenAcademyCurriculum = [
     accentColor: Color(0xFFF59E0B),
     ageSuitability: '2–6 سنوات',
     levelName: 'مبتدئ',
-    title: 'الألوان الأساسية والدائرة والمربع والمثلث',
+    title: 'الألوان الأساسية والأشكال الهندسية',
     illustrationEmoji: '🔴🟦🔺',
     introductionText:
-        'الدائرة مستديرة مثل الشمس ☀️، والمربع له ٤ أضلاع متساوية 🟦، والمثلث له ٣ زوايا 🔺!',
+        'الدائرة الحمراء 🔴 مثل التفاحة، والمربع الأزرق 🟦 له ٤ أضلاع، والمثلث الأصفر 🔺 له ٣ زوايا!',
     targetWordOrPhrase: 'دَائِرَةٌ حَمْرَاءُ ، مُرَبَّعٌ أَزْرَقُ ، مُثَلَّثٌ أَصْفَرُ',
-    interactivePrompt: 'ارسم بإصبعك دائرة في الهواء!',
-    quizQuestion: 'ما الشكل الهندسي المستدير الذي يشبه قرص الشمس؟',
-    quizOptions: ['الدائرة 🔴', 'المربع 🟦', 'المثلث 🔺'],
-    correctOption: 'الدائرة 🔴',
+    interactivePrompt: 'المس كل شكل لتستمع لاسمه ولونه:',
+    interactiveVisualCards: [
+      {'emoji': '🔴', 'label': 'دَائِرَة حَمْرَاء', 'speak': 'دَائِرَةٌ حَمْرَاءُ مُسْتَدِيرَةٌ'},
+      {'emoji': '🟦', 'label': 'مُرَبَّع أَزْرَق', 'speak': 'مُرَبَّعٌ أَزْرَقُ لَهُ أَرْبَعَةُ أَضْلَاعٍ'},
+      {'emoji': '🔺', 'label': 'مُثَلَّث أَصْفَر', 'speak': 'مُثَلَّثٌ لَهُ ثَلَاثُ زَوَايَا'},
+    ],
+    quizQuestion: 'ما الشكل الهندسي المستدير الذي يشبه الشمس؟',
+    quizOptions: ['🔴 الدائرة', '🟦 المربع', '🔺 المثلث'],
+    correctOption: '🔴 الدائرة',
     rewardSticker: '🎨 وسام الأشكال والألوان',
   ),
   AcademyTrackLessonModel(
@@ -14997,17 +15115,22 @@ const List<AcademyTrackLessonModel> kHaneenAcademyCurriculum = [
     trackTitle: '٤. الحيوانات والطبيعة',
     trackIcon: '🦁',
     accentColor: Color(0xFF10B981),
-    ageSuitability: '3–6 سنوات',
-    levelName: 'متوسط',
+    ageSuitability: '2–6 سنوات',
+    levelName: 'مبتدئ',
     title: 'الحيوانات وأصواتها وبيئاتها الطبيعية',
     illustrationEmoji: '🦁🐬🐪',
     introductionText:
-        'الأسد يعيش في الغابة، والدلفين يسبح في البحر، والجمل يصبر في الصحراء ويسمى سفينة الصحراء!',
-    targetWordOrPhrase: 'الجَمَلُ فِي الصَّحْرَاءِ ، وَالدُّلْفِينُ فِي البَحْرِ',
-    interactivePrompt: 'قلّد حركة موج البحر الهادئ بيديك!',
+        'الأسد في الغابة، والدلفين في البحر، والجمل في الصحراء، والعصفور يغرد فوق الشجرة!',
+    targetWordOrPhrase: 'أَسَدُ الغَابَةِ ، دُلْفِينُ البَحْرِ ، جَمَلُ الصَّحْرَاءِ',
+    interactivePrompt: 'المس كل حيوان لتسمع صوته وأين يعيش:',
+    interactiveVisualCards: [
+      {'emoji': '🦁', 'label': 'الأَسَد (الغابة)', 'speak': 'الأَسَدُ يَزْأَرُ وَيَعِيشُ فِي الغَابَةِ'},
+      {'emoji': '🐬', 'label': 'الدُّلْفِين (البحر)', 'speak': 'الدُّلْفِينُ الذَّكِيُّ يَسْبَحُ فِي البَحْرِ'},
+      {'emoji': '🐪', 'label': 'الجَمَل (الصحراء)', 'speak': 'الجَمَلُ سَفِينَةُ الصَّحْرَاءِ'},
+    ],
     quizQuestion: 'أين يعيش ويسبح الدلفين الذكي 🐬؟',
-    quizOptions: ['في البحر الواسع 🌊', 'في الصحراء 🏜️', 'فوق الشجرة 🌳'],
-    correctOption: 'في البحر الواسع 🌊',
+    quizOptions: ['🌊 في البحر', '🏜️ في الصحراء', '🌳 فوق الشجرة'],
+    correctOption: '🌊 في البحر',
     rewardSticker: '🌿 وسام مستكشف الطبيعة',
   ),
   AcademyTrackLessonModel(
@@ -15016,17 +15139,22 @@ const List<AcademyTrackLessonModel> kHaneenAcademyCurriculum = [
     trackTitle: '٥. الكلمات والمفردات',
     trackIcon: '📚',
     accentColor: Color(0xFFA855F7),
-    ageSuitability: '3–6 سنوات',
-    levelName: 'متوسط',
-    title: 'مفردات البيت والمدرسة والحديقة',
-    illustrationEmoji: '🏡🎒🌸',
+    ageSuitability: '2–6 سنوات',
+    levelName: 'مبتدئ',
+    title: 'مفردات البيت والمدرسة والفواكه',
+    illustrationEmoji: '🏡🎒🍎',
     introductionText:
-        'في الصباح نرتدي الحقيبة المدرسية (حَقِيبَة)، ونقرأ في (كِتَاب)، ونكتب بـ (قَلَم)!',
-    targetWordOrPhrase: 'كِتَابٌ مُفِيدٌ ، قَلَمٌ جَمِيلٌ ، حَدِيقَةٌ خَضْرَاءُ',
-    interactivePrompt: 'سمِّ ٣ أشياء جميلة تراها الآن في غرفتك!',
+        'نتعلم كلمات جديدة بالصور والصوت والتكرار: كتاب، قلم، حقيبة، وتفاحة!',
+    targetWordOrPhrase: 'كِتَابٌ ، قَلَمٌ ، حَقِيبَةٌ ، تُفَّاحَةٌ',
+    interactivePrompt: 'المس الصورة لتسمع الكلمة وتكررها بصوتك:',
+    interactiveVisualCards: [
+      {'emoji': '📘', 'label': 'كِتَابٌ', 'speak': 'كِتَابٌ ، نَقْرَأُ فِيهِ القِصَصَ'},
+      {'emoji': '✏️', 'label': 'قَلَمٌ', 'speak': 'قَلَمٌ ، نَكْتُبُ وَنَرْسُمُ بِهِ'},
+      {'emoji': '🎒', 'label': 'حَقِيبَةٌ', 'speak': 'حَقِيبَةٌ مَدْرَسِيَّةٌ مُرَتَّبَةٌ'},
+    ],
     quizQuestion: 'ماذا نستخدم لنكتب ونرسم على الورقة؟',
-    quizOptions: ['القَلَم ✏️', 'الكُرَة ⚽', 'المِلْعَقَة 🥄'],
-    correctOption: 'القَلَم ✏️',
+    quizOptions: ['✏️ القَلَم', '⚽ الكُرَة', '🥄 المِلْعَقَة'],
+    correctOption: '✏️ القَلَم',
     rewardSticker: '📚 وسام حصيلة المفردات',
   ),
   AcademyTrackLessonModel(
@@ -15037,15 +15165,20 @@ const List<AcademyTrackLessonModel> kHaneenAcademyCurriculum = [
     accentColor: Color(0xFFEC4899),
     ageSuitability: '3–9 سنوات',
     levelName: 'متوسط',
-    title: 'تكوين جمل مهذبة للتواصل اليومي',
+    title: 'جمل التواصل المهذب: من فضلك وشكراً لك',
     illustrationEmoji: '🤝💬',
     introductionText:
-        'عندما نطلب شيئاً نقول بلطف: «مِنْ فَضْلِكَ»، وعندما يساعدنا أحد نقول: «شُكْرًا لَكَ»، وعند الاستئذان نقول: «هَلْ تَسْمَحُ لِي؟».',
-    targetWordOrPhrase: 'مِنْ فَضْلِكَ يَا أُمِّي ، شُكْرًا لَكَ يَا أَبِي',
-    interactivePrompt: 'انطق جملة الشكر بصوت دافئ وابتسامة!',
+        'نستخدم جملنا العربية الجميلة للتحدث بلطف مع ماما وبابا وأصدقائنا.',
+    targetWordOrPhrase: 'مِنْ فَضْلِكَ ، شُكْرًا لَكَ ، صَبَاحُ الخَيْرِ',
+    interactivePrompt: 'المس كل عبارة لتستمع إليها وترددها:',
+    interactiveVisualCards: [
+      {'emoji': '☀️', 'label': 'صَبَاحُ الخَيْرِ', 'speak': 'صَبَاحُ الخَيْرِ يَا أُمِّي وَأَبِي'},
+      {'emoji': '🙏', 'label': 'مِنْ فَضْلِكَ', 'speak': 'مِنْ فَضْلِكَ ، هَلْ تُسَاعِدُنِي؟'},
+      {'emoji': '💝', 'label': 'شُكْرًا لَكَ', 'speak': 'شُكْرًا لَكَ عَلَى مُسَاعَدَتِكَ'},
+    ],
     quizQuestion: 'ماذا نقول لمن يقدم لنا هدية أو مساعدة؟',
-    quizOptions: ['شُكْرًا لَكَ 🌟', 'أعطني بسرعة', 'لا أتكلم'],
-    correctOption: 'شُكْرًا لَكَ 🌟',
+    quizOptions: ['🌟 شُكْرًا لَكَ', 'أعطني بسرعة', 'لا أتكلم'],
+    correctOption: '🌟 شُكْرًا لَكَ',
     rewardSticker: '🗣️ وسام المتحدث الفصيح',
   ),
   AcademyTrackLessonModel(
@@ -15054,17 +15187,22 @@ const List<AcademyTrackLessonModel> kHaneenAcademyCurriculum = [
     trackTitle: '٧. العلوم المبسطة',
     trackIcon: '🔬',
     accentColor: Color(0xFF06B6D4),
-    ageSuitability: '4–9 سنوات',
-    levelName: 'متقدم',
-    title: 'الحواس الخمس والطقس ونمو النباتات',
-    illustrationEmoji: '👀👂👃👅🖐️',
+    ageSuitability: '3–9 سنوات',
+    levelName: 'متوسط',
+    title: 'الجسم والحواس الخمس والنبات والطقس',
+    illustrationEmoji: '👀👂🌱☀️',
     introductionText:
-        'خلق الله لنا خمس حواس رائعة: نرى بالعينين 👀، ونسمع بالأذنين 👂، ونشم بالأنف 👃، ونتذوق باللسان 👅، ونلمس باليدين 🖐️!',
-    targetWordOrPhrase: 'أَرَى بِعَيْنِي ، وَأَسْمَعُ بِأُذُنِي ، وَأَشُمُّ بِأَنْفِي',
-    interactivePrompt: 'أغمض عينيك ثانية واحدة واستمع لأصوات الغرفة بهدوء!',
+        'نرى بالعين 👀، ونسمع بالأذن 👂، ونشم الأزهار بالأنف 👃، والنبات ينمو بالماء وضوء الشمس ☀️!',
+    targetWordOrPhrase: 'العَيْنُ لِلرُّؤْيَةِ ، وَالأُذُنُ لِلسَّمْعِ ، وَالشَّمْسُ لِلنَّبَاتِ',
+    interactivePrompt: 'المس كل رمز علمي لتكتشف وظيفته:',
+    interactiveVisualCards: [
+      {'emoji': '👀', 'label': 'حَاسَّةُ البَصَر', 'speak': 'أَرَى الأَلْوَانَ وَالأَشْيَاءَ بِعَيْنَيَّ'},
+      {'emoji': '👃', 'label': 'حَاسَّةُ الشَّمّ', 'speak': 'أَشُمُّ رَائِحَةَ الوَرْدِ بِأَنْفِي'},
+      {'emoji': '🌱☀️', 'label': 'نُمُوُّ النَّبَات', 'speak': 'النَّبَاتُ يَحْتَاجُ إِلَى المَاءِ وَضَوْءِ الشَّمْسِ'},
+    ],
     quizQuestion: 'بأي حاسة نشمّ رائحة الأزهار الذكية 🌸؟',
-    quizOptions: ['بحاسة الشم (الأنف 👃)', 'بالأذن 👂', 'بالقدم 🦶'],
-    correctOption: 'بحاسة الشم (الأنف 👃)',
+    quizOptions: ['👃 بالأنف', '👂 بالأذن', '🦶 بالقدم'],
+    correctOption: '👃 بالأنف',
     rewardSticker: '🔬 وسام العالم الصغير',
   ),
   AcademyTrackLessonModel(
@@ -15075,19 +15213,24 @@ const List<AcademyTrackLessonModel> kHaneenAcademyCurriculum = [
     accentColor: Color(0xFFF43F5E),
     ageSuitability: '3–9 سنوات',
     levelName: 'متوسط',
-    title: 'المشاركة واللطف والتعبير عن المشاعر بهدوء',
-    illustrationEmoji: '🤗🎁',
+    title: 'المشاركة واللطف والتعبير عن المشاعر',
+    illustrationEmoji: '🤗🎁😊',
     introductionText:
-        'عندما نشارك ألعابنا مع إخوتنا وأصدقائنا تتضاعف الفرحة! وإذا شعرنا بالحزن أو الغضب نتنفس بعمق ونعبّر بالكلام الهادئ.',
-    targetWordOrPhrase: 'أَنَا أُشَارِكُ أَلْعَابِي وَأَتَحَدَّثُ بِلُطْفٍ',
-    interactivePrompt: 'ابتسم الآن ابتسامة الصديق المتعاون!',
+        'نشارك ألعابنا بمحبة، ونحترم الكبير، ونعبّر عن مشاعرنا بهدوء وابتسامة.',
+    targetWordOrPhrase: 'أَنَا أُشَارِكُ أَصْدِقَائِي وَأَحْتَرِمُ الجَمِيعَ',
+    interactivePrompt: 'المس كل موقف اجتماعي لتسمع التصرف الجميل:',
+    interactiveVisualCards: [
+      {'emoji': '🤝', 'label': 'المُشَارَكَة', 'speak': 'أُشَارِكُ أَلْعَابِي مَعَ إِخْوَتِي وَأَصْدِقَائِي'},
+      {'emoji': '😊', 'label': 'اللُّطْفُ وَالابْتِسَامَة', 'speak': 'الابْتِسَامَةُ فِي وَجْهِ أَخِيكَ صَدَقَةٌ'},
+      {'emoji': '🧘', 'label': 'الهُدُوءُ عِنْدَ الغَضَب', 'speak': 'عِنْدَمَا أَغْضَبُ أَتَنَفَّسُ بِعُمْقٍ وَأَتَحَدَّثُ بِهُدُوءٍ'},
+    ],
     quizQuestion: 'إذا أراد أخوك الصغير اللعب معك بالمكعبات، ماذا تفعل؟',
     quizOptions: [
-      'أشاركه اللعب بلطف 🤝',
-      'أخفي كل الألعاب وحدي',
+      '🤝 أشاركه اللعب بلطف',
+      'أخفي الألعاب وحدي',
       'أصرخ بصوت عالٍ',
     ],
-    correctOption: 'أشاركه اللعب بلطف 🤝',
+    correctOption: '🤝 أشاركه اللعب بلطف',
     rewardSticker: '❤️ وسام القلب الطيب',
   ),
   AcademyTrackLessonModel(
@@ -15098,19 +15241,24 @@ const List<AcademyTrackLessonModel> kHaneenAcademyCurriculum = [
     accentColor: Color(0xFF8B5CF6),
     ageSuitability: '2–9 سنوات',
     levelName: 'مبتدئ',
-    title: 'النظافة وترتيب الغرفة والاستعداد للنوم',
+    title: 'النظافة وترتيب الألعاب والاستعداد للنوم',
     illustrationEmoji: '🧼🧸🌙',
     introductionText:
-        'البطل المنظم يغسل يديه قبل الأكل وبعده، ويعيد ألعابه إلى السلة بعد اللعب، وينظف أسنانه قبل النوم المبكر!',
-    targetWordOrPhrase: 'نَظَافَتِي وَتَرْتِيبِي سِرُّ صِحَّتِي وَنَشَاطِي',
-    interactivePrompt: 'تعهّد بترتيب سريرك وألعابك كل يوم!',
+        'نغسل يدينا بالماء والصابون 🧼، ونعيد ألعابنا للسلة 🧸، وننظف أسناننا قبل النوم المبكر 🌙!',
+    targetWordOrPhrase: 'أَغْسِلُ يَدَيَّ ، وَأُرَتِّبُ غُرْفَتِي ، وَأَنَامُ مُبَكِّرًا',
+    interactivePrompt: 'المس كل عادة يومية لتسمعها وتطبقها في يومك:',
+    interactiveVisualCards: [
+      {'emoji': '🧼', 'label': 'غَسْلُ اليَدَيْن', 'speak': 'أَغْسِلُ يَدَيَّ بِالمَاءِ وَالصَّابُونِ قَبْلَ الطَّعَامِ'},
+      {'emoji': '🧸', 'label': 'تَرْتِيبُ الأَلْعَاب', 'speak': 'أَضَعُ أَلْعَابِي فِي السَّلَّةِ بَعْدَ اللَّعِبِ'},
+      {'emoji': '🪥🌙', 'label': 'تَنْظِيفُ الأَسْنَان', 'speak': 'أُنَظِّفُ أَسْنَانِي بِالفُرْشَاةِ قَبْلَ النَّوْمِ'},
+    ],
     quizQuestion: 'متى نعيد الألعاب إلى سلتها المخصصة 🧸؟',
     quizOptions: [
-      'فور الانتهاء من اللعب ✅',
-      'نتركها مبعثرة على الأرض',
+      '✅ فور الانتهاء من اللعب',
+      'نتركها على الأرض',
       'لا نرتبها أبداً',
     ],
-    correctOption: 'فور الانتهاء من اللعب ✅',
+    correctOption: '✅ فور الانتهاء من اللعب',
     rewardSticker: '🪥 وسام البطل المنظم',
   ),
 ];
@@ -15243,6 +15391,7 @@ class _HaneenAcademyScreenState extends State<HaneenAcademyScreen>
   bool _nightStoryMode = false;
   double _storySpeechRate = 0.35;
   final Map<String, String> _selectedLessonQuizOption = {};
+  final Map<String, Set<int>> _tappedVisualCardsByLesson = {};
   final Map<String, String> _selectedStoryBranch = {};
   final Map<String, String> _selectedStoryQuizOption = {};
 
@@ -15281,7 +15430,7 @@ class _HaneenAcademyScreenState extends State<HaneenAcademyScreen>
           appBar: AppBar(
             backgroundColor: const Color(0xFF1E293B),
             title: Text(
-              '🎓 أكاديمية حنين التعليمية (${child.name})',
+              '🎓 أكاديمية حنين (${child.name})',
               style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
             ),
             actions: [
@@ -15297,7 +15446,7 @@ class _HaneenAcademyScreenState extends State<HaneenAcademyScreen>
                       border: Border.all(color: const Color(0xFFF59E0B)),
                     ),
                     child: Text(
-                      '⭐ ${child.starsEarned} | 🎓 ${child.completedLessons.length}',
+                      '⭐ ${child.starsEarned} | 🎓 ${child.completedLessons.length}/${kHaneenAcademyCurriculum.length}',
                       style: const TextStyle(
                         fontSize: 12,
                         fontWeight: FontWeight.bold,
@@ -15357,17 +15506,83 @@ class _HaneenAcademyScreenState extends State<HaneenAcademyScreen>
             .where((l) => l.trackId == _selectedTrackFilter)
             .toList();
 
+    final AcademyTrackLessonModel resumeLesson =
+        kHaneenAcademyCurriculum.firstWhere(
+      (l) => l.id == child.lastActiveAcademyLessonId,
+      orElse: () => kHaneenAcademyCurriculum.firstWhere(
+        (l) => !child.completedLessons.contains(l.id),
+        orElse: () => kHaneenAcademyCurriculum.first,
+      ),
+    );
+
     return Column(
       children: [
         Padding(
-          padding: const EdgeInsets.fromLTRB(12, 10, 12, 4),
-          child: CuteSuperheroCompanionBanner(
-            appState: widget.appState,
-            compactMode: true,
+          padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            decoration: BoxDecoration(
+              gradient: const LinearGradient(
+                colors: [Color(0xFF0F766E), Color(0xFF1E293B)],
+              ),
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: const Color(0xFF14B8A6)),
+            ),
+            child: Row(
+              children: [
+                Text(resumeLesson.illustrationEmoji,
+                    style: const TextStyle(fontSize: 24)),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        '▶️ استكمال الدرس المحفوظ (${child.educationLevel}):',
+                        style: const TextStyle(
+                            fontSize: 10.5, color: Color(0xFFA7F3D0)),
+                      ),
+                      Text(
+                        resumeLesson.title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontSize: 12.5,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.white,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                ElevatedButton.icon(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFFF59E0B),
+                    foregroundColor: Colors.black87,
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  ),
+                  onPressed: () {
+                    setState(() {
+                      _selectedTrackFilter = resumeLesson.trackId;
+                    });
+                    CalmVoiceService.instance.speakCalmly(
+                      '${resumeLesson.title}. ${resumeLesson.introductionText}',
+                      rate: 0.35,
+                      allowSpeechForRepeatGame: true,
+                    );
+                  },
+                  icon: const Icon(Icons.play_arrow_rounded, size: 16),
+                  label: const Text('استكمل 🔊',
+                      style:
+                          TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+                ),
+              ],
+            ),
           ),
         ),
         SizedBox(
-          height: 40,
+          height: 38,
           child: ListView.builder(
             scrollDirection: Axis.horizontal,
             padding: const EdgeInsets.symmetric(horizontal: 10),
@@ -15379,7 +15594,7 @@ class _HaneenAcademyScreenState extends State<HaneenAcademyScreen>
                 onTap: () => setState(() => _selectedTrackFilter = tf['id']!),
                 child: Container(
                   margin:
-                      const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+                      const EdgeInsets.symmetric(horizontal: 4, vertical: 3),
                   padding:
                       const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
                   decoration: BoxDecoration(
@@ -15417,6 +15632,8 @@ class _HaneenAcademyScreenState extends State<HaneenAcademyScreen>
               final bool isDone = child.completedLessons.contains(lesson.id);
               final String? chosenOpt = _selectedLessonQuizOption[lesson.id];
               final bool isQuizCorrect = chosenOpt == lesson.correctOption;
+              final Set<int> tappedCards =
+                  _tappedVisualCardsByLesson[lesson.id] ?? <int>{};
 
               return Container(
                 margin: const EdgeInsets.only(bottom: 16),
@@ -15428,7 +15645,7 @@ class _HaneenAcademyScreenState extends State<HaneenAcademyScreen>
                     color: isDone
                         ? const Color(0xFF10B981)
                         : lesson.accentColor.withOpacity(0.6),
-                    width: isDone ? 2.0 : 1.2,
+                    width: isDone ? 2.2 : 1.2,
                   ),
                 ),
                 child: Column(
@@ -15436,14 +15653,26 @@ class _HaneenAcademyScreenState extends State<HaneenAcademyScreen>
                   children: [
                     Row(
                       children: [
-                        Container(
-                          padding: const EdgeInsets.all(10),
-                          decoration: BoxDecoration(
-                            color: lesson.accentColor.withOpacity(0.2),
-                            shape: BoxShape.circle,
+                        GestureDetector(
+                          onTap: () {
+                            widget.appState
+                                .setLastActiveAcademyLesson(lesson.id);
+                            CalmVoiceService.instance.speakCalmly(
+                              '${lesson.title}. ${lesson.introductionText}',
+                              rate: 0.35,
+                              allowSpeechForRepeatGame: true,
+                            );
+                          },
+                          child: Container(
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(
+                              color: lesson.accentColor.withOpacity(0.22),
+                              shape: BoxShape.circle,
+                              border: Border.all(color: lesson.accentColor),
+                            ),
+                            child: Text(lesson.illustrationEmoji,
+                                style: const TextStyle(fontSize: 28)),
                           ),
-                          child: Text(lesson.illustrationEmoji,
-                              style: const TextStyle(fontSize: 28)),
                         ),
                         const SizedBox(width: 10),
                         Expanded(
@@ -15451,7 +15680,7 @@ class _HaneenAcademyScreenState extends State<HaneenAcademyScreen>
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Text(
-                                '${lesson.trackTitle} • ${lesson.ageSuitability}',
+                                '${lesson.trackTitle} • ${lesson.ageSuitability} (${lesson.levelName})',
                                 style: TextStyle(
                                   fontSize: 11,
                                   fontWeight: FontWeight.bold,
@@ -15462,13 +15691,27 @@ class _HaneenAcademyScreenState extends State<HaneenAcademyScreen>
                               Text(
                                 lesson.title,
                                 style: const TextStyle(
-                                  fontSize: 16,
+                                  fontSize: 15.5,
                                   fontWeight: FontWeight.bold,
                                   color: Colors.white,
                                 ),
                               ),
                             ],
                           ),
+                        ),
+                        IconButton(
+                          tooltip: 'استمع لشرح الدرس بالصوت',
+                          onPressed: () {
+                            widget.appState
+                                .setLastActiveAcademyLesson(lesson.id);
+                            CalmVoiceService.instance.speakCalmly(
+                              '${lesson.title}. ${lesson.introductionText}. ${lesson.targetWordOrPhrase}',
+                              rate: 0.35,
+                              allowSpeechForRepeatGame: true,
+                            );
+                          },
+                          icon: Icon(Icons.volume_up_rounded,
+                              color: lesson.accentColor, size: 28),
                         ),
                         if (isDone)
                           Container(
@@ -15481,7 +15724,7 @@ class _HaneenAcademyScreenState extends State<HaneenAcademyScreen>
                             child: const Text(
                               '✅ مكتمل',
                               style: TextStyle(
-                                fontSize: 11,
+                                fontSize: 10.5,
                                 fontWeight: FontWeight.bold,
                                 color: Color(0xFFA7F3D0),
                               ),
@@ -15489,80 +15732,121 @@ class _HaneenAcademyScreenState extends State<HaneenAcademyScreen>
                           ),
                       ],
                     ),
-                    const SizedBox(height: 10),
+                    const SizedBox(height: 8),
                     Text(
                       lesson.introductionText,
                       style: const TextStyle(
-                          fontSize: 13.5, height: 1.5, color: Colors.white),
+                          fontSize: 13, height: 1.45, color: Colors.white),
                     ),
                     const SizedBox(height: 10),
-                    Container(
-                      width: double.infinity,
-                      padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF0F172A),
-                        borderRadius: BorderRadius.circular(14),
-                        border:
-                            Border.all(color: lesson.accentColor.withOpacity(0.5)),
-                      ),
-                      child: Row(
-                        children: [
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  '🗣️ الكلمة / العبارة المستهدفة:',
-                                  style: TextStyle(
-                                      fontSize: 11, color: lesson.accentColor),
-                                ),
-                                const SizedBox(height: 4),
-                                Text(
-                                  lesson.targetWordOrPhrase,
-                                  style: const TextStyle(
-                                    fontSize: 16,
-                                    fontWeight: FontWeight.bold,
-                                    color: Color(0xFFFDE68A),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                          ElevatedButton.icon(
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: lesson.accentColor,
-                              foregroundColor: Colors.white,
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 10, vertical: 8),
-                            ),
-                            onPressed: () {
-                              CalmVoiceService.instance.speakCalmly(
-                                '${lesson.title}. ${lesson.targetWordOrPhrase}',
-                                rate: 0.34,
-                                allowSpeechForRepeatGame: true,
-                              );
-                            },
-                            icon: const Icon(Icons.volume_up_rounded, size: 18),
-                            label: const Text('استمع للنطق',
-                                style: TextStyle(fontSize: 12)),
-                          ),
-                        ],
+                    Text(
+                      '👆 ${lesson.interactivePrompt}',
+                      style: const TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.bold,
+                        color: Color(0xFFFDE68A),
                       ),
                     ),
                     const SizedBox(height: 8),
-                    Text(
-                      '🎯 نشاط الدرس: ${lesson.interactivePrompt}',
-                      style: const TextStyle(
-                          fontSize: 12, color: Color(0xFFBAE6FD)),
+                    Row(
+                      children: List.generate(
+                        lesson.interactiveVisualCards.length,
+                        (cardIdx) {
+                          final card = lesson.interactiveVisualCards[cardIdx];
+                          final bool wasTapped = tappedCards.contains(cardIdx);
+                          return Expanded(
+                            child: GestureDetector(
+                              onTap: () {
+                                setState(() {
+                                  final set = _tappedVisualCardsByLesson
+                                      .putIfAbsent(lesson.id, () => <int>{});
+                                  set.add(cardIdx);
+                                });
+                                widget.appState
+                                    .setLastActiveAcademyLesson(lesson.id);
+                                CalmVoiceService.instance.speakCalmly(
+                                  card['speak'] ?? card['label'] ?? '',
+                                  rate: 0.34,
+                                  allowSpeechForRepeatGame: true,
+                                );
+                              },
+                              child: AnimatedContainer(
+                                duration: const Duration(milliseconds: 220),
+                                margin:
+                                    const EdgeInsets.symmetric(horizontal: 4),
+                                padding: const EdgeInsets.symmetric(
+                                    vertical: 10, horizontal: 6),
+                                decoration: BoxDecoration(
+                                  color: wasTapped
+                                      ? lesson.accentColor.withOpacity(0.28)
+                                      : const Color(0xFF0F172A),
+                                  borderRadius: BorderRadius.circular(16),
+                                  border: Border.all(
+                                    color: wasTapped
+                                        ? lesson.accentColor
+                                        : Colors.white24,
+                                    width: wasTapped ? 2 : 1,
+                                  ),
+                                ),
+                                child: Column(
+                                  children: [
+                                    Text(card['emoji'] ?? '🌟',
+                                        style: const TextStyle(fontSize: 30)),
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      card['label'] ?? '',
+                                      textAlign: TextAlign.center,
+                                      style: const TextStyle(
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.bold,
+                                        color: Colors.white,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 2),
+                                    Icon(
+                                      wasTapped
+                                          ? Icons.check_circle_rounded
+                                          : Icons.volume_up_rounded,
+                                      size: 14,
+                                      color: wasTapped
+                                          ? const Color(0xFF10B981)
+                                          : Colors.white54,
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          );
+                        },
+                      ),
                     ),
                     const Divider(color: Colors.white12, height: 20),
-                    Text(
-                      '❓ سؤال قصير: ${lesson.quizQuestion}',
-                      style: const TextStyle(
-                        fontSize: 13.5,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.white,
-                      ),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            '❓ ${lesson.quizQuestion}',
+                            style: const TextStyle(
+                              fontSize: 13.5,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.white,
+                            ),
+                          ),
+                        ),
+                        IconButton(
+                          visualDensity: VisualDensity.compact,
+                          tooltip: 'استمع للسؤال',
+                          onPressed: () {
+                            CalmVoiceService.instance.speakCalmly(
+                              lesson.quizQuestion,
+                              rate: 0.35,
+                              allowSpeechForRepeatGame: true,
+                            );
+                          },
+                          icon: const Icon(Icons.hearing_rounded,
+                              size: 18, color: Color(0xFFF59E0B)),
+                        ),
+                      ],
                     ),
                     const SizedBox(height: 8),
                     Wrap(
@@ -15571,50 +15855,75 @@ class _HaneenAcademyScreenState extends State<HaneenAcademyScreen>
                       children: lesson.quizOptions.map((opt) {
                         final bool isSelected = chosenOpt == opt;
                         final bool isOptRight = opt == lesson.correctOption;
-                        return ChoiceChip(
-                          selected: isSelected,
-                          selectedColor: isOptRight
-                              ? const Color(0xFF10B981)
-                              : const Color(0xFFF59E0B),
-                          backgroundColor: const Color(0xFF0F172A),
-                          label: Text(
-                            opt,
-                            style: const TextStyle(
-                                color: Colors.white, fontSize: 12.5),
-                          ),
-                          onSelected: (_) async {
-                            setState(() {
-                              _selectedLessonQuizOption[lesson.id] = opt;
-                            });
-                            if (isOptRight) {
-                              final isNew = await widget.appState
-                                  .completeAcademyLesson(
-                                lessonId: lesson.id,
-                                lessonTitle: lesson.title,
-                                learnedWord: lesson.targetWordOrPhrase,
-                                rewardStars: 2,
-                              );
-                              if (mounted) {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(
-                                    content: Text(
-                                      isNew
-                                          ? '🎉 أحسنت يا بطل! حصلت على ${lesson.rewardSticker} (+2 نجمة ⭐)'
-                                          : '✅ إجابة صحيحة! أحسنت مراجعة الدرس!',
+                        return SizedBox(
+                          height: 44,
+                          child: ElevatedButton(
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: isSelected
+                                  ? (isOptRight
+                                      ? const Color(0xFF10B981)
+                                      : const Color(0xFFF59E0B))
+                                  : const Color(0xFF0F172A),
+                              foregroundColor: Colors.white,
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(14),
+                                side: BorderSide(
+                                  color: isSelected
+                                      ? Colors.white
+                                      : lesson.accentColor.withOpacity(0.5),
+                                ),
+                              ),
+                            ),
+                            onPressed: () async {
+                              setState(() {
+                                _selectedLessonQuizOption[lesson.id] = opt;
+                              });
+                              if (isOptRight) {
+                                final isNew = await widget.appState
+                                    .completeAcademyLesson(
+                                  lessonId: lesson.id,
+                                  lessonTitle: lesson.title,
+                                  learnedWord: lesson.targetWordOrPhrase,
+                                  rewardStars: 2,
+                                );
+                                CalmVoiceService.instance.speakCalmly(
+                                  'إجابة صحيحة! أحسنت يا بطل!',
+                                  rate: 0.36,
+                                  allowSpeechForRepeatGame: true,
+                                );
+                                if (mounted) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(
+                                      content: Text(
+                                        isNew
+                                            ? '🎉 أحسنت يا بطل! حصلت على ${lesson.rewardSticker} (+2 نجمة ⭐)'
+                                            : '✅ إجابة صحيحة! أحسنت مراجعة الدرس!',
+                                      ),
+                                      backgroundColor: const Color(0xFF10B981),
                                     ),
-                                    backgroundColor: const Color(0xFF10B981),
-                                  ),
+                                  );
+                                }
+                              } else {
+                                CalmVoiceService.instance.speakCalmly(
+                                  'حاول مرة أخرى يا بطل، المس الصور بالأعلى لتستمع للإجابة.',
+                                  rate: 0.35,
+                                  allowSpeechForRepeatGame: true,
                                 );
                               }
-                            }
-                          },
+                            },
+                            child: Text(
+                              opt,
+                              style: const TextStyle(
+                                  fontSize: 13.5, fontWeight: FontWeight.bold),
+                            ),
+                          ),
                         );
                       }).toList(),
                     ),
                     if (chosenOpt != null && !isQuizCorrect) ...[
                       const SizedBox(height: 6),
                       const Text(
-                        '💡 تلميح لطيف: استمع للنطق مرة أخرى بالأعلى وجرب الإجابة الأخرى بهدوء!',
+                        '💡 تلميح لطيف: المس البطاقات المصورة بالأعلى لتسمع النطق الصحيح ثم اختر الإجابة!',
                         style:
                             TextStyle(fontSize: 12, color: Color(0xFFFDE68A)),
                       ),
