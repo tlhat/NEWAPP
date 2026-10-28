@@ -549,10 +549,7 @@ class SmartVideoLinkAutoImporter {
             .timeout(const Duration(seconds: 12));
 
         if (manifest.muxed.isNotEmpty) {
-          final sortedMuxed = manifest.muxed.toList()
-            ..sort((a, b) =>
-                b.videoResolution.height.compareTo(a.videoResolution.height));
-          final bestMuxed = sortedMuxed.first;
+          final bestMuxed = manifest.muxed.withHighestBitrate();
           bestStreamUrl = bestMuxed.url.toString();
           final int h = bestMuxed.videoResolution.height;
           final int w = bestMuxed.videoResolution.width;
@@ -561,10 +558,8 @@ class SmartVideoLinkAutoImporter {
           }
           badge = h >= 720 ? '${h}p Full HD' : '${h}p HD';
         } else if (manifest.hls.isNotEmpty) {
-          final sortedHls = manifest.hls.toList()
-            ..sort((a, b) =>
-                b.videoResolution.height.compareTo(a.videoResolution.height));
-          bestStreamUrl = sortedHls.first.url.toString();
+          final bestHls = manifest.hls.withHighestBitrate();
+          bestStreamUrl = bestHls.url.toString();
           badge = '1080p HLS';
         }
       } catch (_) {
