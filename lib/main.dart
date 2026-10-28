@@ -314,14 +314,9 @@ class SmartVideoLinkAutoImporter {
   }
 
   static String? extractTikTokUsernameFromProfile(String url) {
-    final String trimmed = url.trim();
+    final String trimmed = Uri.decodeFull(url.trim());
     if (!isTikTokUrl(trimmed)) return null;
-    if (trimmed.toLowerCase().contains('/video/') ||
-        trimmed.toLowerCase().contains('vm.tiktok.com') ||
-        trimmed.toLowerCase().contains('vt.tiktok.com') ||
-        trimmed.toLowerCase().contains('/t/')) {
-      return null;
-    }
+    if (trimmed.toLowerCase().contains('/video/')) return null;
     final RegExp profileRegex =
         RegExp(r'tiktok\.com\/@([a-zA-Z0-9_.-]+)', caseSensitive: false);
     final match = profileRegex.firstMatch(trimmed);
@@ -329,6 +324,40 @@ class SmartVideoLinkAutoImporter {
       return match.group(1);
     }
     return null;
+  }
+
+  static Future<String> _resolveRedirectUrlIfNeeded(String rawUrl) async {
+    final String trimmed = rawUrl.trim();
+    final String lower = trimmed.toLowerCase();
+    if (!lower.contains('vm.tiktok.com') &&
+        !lower.contains('vt.tiktok.com') &&
+        !lower.contains('tiktok.com/t/')) {
+      return trimmed;
+    }
+    try {
+      final client = http.Client();
+      try {
+        final req = http.Request('GET', Uri.parse(trimmed))
+          ..followRedirects = false
+          ..headers['User-Agent'] =
+              'Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/124.0.0.0 Mobile Safari/537.36';
+        final streamed =
+            await client.send(req).timeout(const Duration(seconds: 6));
+        final String? loc = streamed.headers['location'];
+        if (loc != null && loc.isNotEmpty) {
+          if (loc.startsWith('http')) return loc;
+        }
+      } finally {
+        client.close();
+      }
+    } catch (_) {}
+    return trimmed;
+  }
+
+  static Future<bool> detectIfChannelOrPlaylistUrl(String rawUrl) async {
+    final String resolved = await _resolveRedirectUrlIfNeeded(rawUrl);
+    return isYouTubeChannelOrPlaylistUrl(resolved) ||
+        extractTikTokUsernameFromProfile(resolved) != null;
   }
 
   static bool isChannelOrPlaylistUrl(String url) {
@@ -371,7 +400,7 @@ class SmartVideoLinkAutoImporter {
 
   static Future<ImportedVideoSourceMetadata> fetchHighDefStreamAndExactMetadata(
       String rawUrl) async {
-    final String trimmed = rawUrl.trim();
+    final String trimmed = await _resolveRedirectUrlIfNeeded(rawUrl.trim());
 
     if (trimmed.startsWith('/') || trimmed.startsWith('file://')) {
       final String fileName = trimmed.split('/').last.replaceAll('.mp4', '');
@@ -840,20 +869,40 @@ class SmartVideoLinkAutoImporter {
     };
   }
 
-  static Future<VideoModel?> autoImportAndGenerateFromUrl(String rawUrl) async {
+  static Future<VideoModel?> autoImportAndGenerateFromUrl(
+    String rawUrl, {
+    String? preFetchedTitle,
+    String? preFetchedDescription,
+  }) async {
     final String cleanUrl = rawUrl.trim();
-    final ImportedVideoSourceMetadata sourceMeta =
+    final ImportedVideoSourceMetadata fetchedMeta =
         await fetchHighDefStreamAndExactMetadata(cleanUrl);
 
-    if (sourceMeta.hdStreamUrl == null ||
-        sourceMeta.hdStreamUrl!.trim().isEmpty) {
+    final String? finalTitle = fetchedMeta.title ?? preFetchedTitle;
+    final String? finalDesc =
+        fetchedMeta.originalDescription ?? preFetchedDescription ?? finalTitle;
+
+    if (fetchedMeta.hdStreamUrl == null &&
+        !isYouTubeUrl(cleanUrl) &&
+        !isTikTokUrl(cleanUrl)) {
       return null;
     }
+
+    final ImportedVideoSourceMetadata mergedMeta = ImportedVideoSourceMetadata(
+      title: finalTitle,
+      originalDescription: finalDesc,
+      authorName: fetchedMeta.authorName,
+      hdStreamUrl: fetchedMeta.hdStreamUrl,
+      sourceRawUrl: cleanUrl,
+      qualityBadge: fetchedMeta.qualityBadge,
+      isVerticalSource: fetchedMeta.isVerticalSource,
+      resolvedRealStream: fetchedMeta.resolvedRealStream,
+    );
 
     final Map<String, dynamic> meta =
         classifyAndGeneratePedagogicalMetadata(
       rawUrl: cleanUrl,
-      sourceMeta: sourceMeta,
+      sourceMeta: mergedMeta,
     );
 
     return VideoModel(
@@ -864,7 +913,7 @@ class SmartVideoLinkAutoImporter {
       ageGroup: meta['ageGroup'] as String,
       repeatPhrase: meta['repeatPhrase'] as String,
       activeActivity: meta['activeActivity'] as String,
-      streamUrl: sourceMeta.hdStreamUrl!,
+      streamUrl: fetchedMeta.hdStreamUrl ?? cleanUrl,
       originalSourceUrl: cleanUrl,
       bgGradientStart: meta['bgGradientStart'] as Color,
       bgGradientEnd: const Color(0xFF0F172A),
@@ -875,32 +924,333 @@ class SmartVideoLinkAutoImporter {
     );
   }
 
+  static VideoModel _buildDeferredChannelVideoItem({
+    required String watchUrl,
+    required String rawTitle,
+    required String rawDescription,
+    required bool isVertical,
+    required int indexOffset,
+  }) {
+    final sourceMeta = ImportedVideoSourceMetadata(
+      title: rawTitle,
+      originalDescription: rawDescription.isNotEmpty ? rawDescription : rawTitle,
+      hdStreamUrl: null,
+      sourceRawUrl: watchUrl,
+      qualityBadge: '1080p Full HD',
+      isVerticalSource: isVertical,
+      resolvedRealStream: false,
+    );
+    final meta = classifyAndGeneratePedagogicalMetadata(
+      rawUrl: watchUrl,
+      sourceMeta: sourceMeta,
+    );
+    return VideoModel(
+      id: 'v_ch_${DateTime.now().millisecondsSinceEpoch}_$indexOffset',
+      title: meta['title'] as String,
+      description: meta['description'] as String,
+      category: meta['category'] as String,
+      ageGroup: meta['ageGroup'] as String,
+      repeatPhrase: meta['repeatPhrase'] as String,
+      activeActivity: meta['activeActivity'] as String,
+      streamUrl: watchUrl,
+      originalSourceUrl: watchUrl,
+      bgGradientStart: meta['bgGradientStart'] as Color,
+      bgGradientEnd: const Color(0xFF0F172A),
+      emoji: meta['emoji'] as String,
+      autoFitMode: meta['autoFitMode'] as String,
+      qualityBadge: '1080p Full HD',
+      likes: 165 + indexOffset * 9,
+    );
+  }
+
+  static Future<String?> _resolveYouTubeChannelIdFromAnyUrl(
+      String channelUrl) async {
+    final RegExp directUcRegex =
+        RegExp(r'youtube\.com\/channel\/(UC[a-zA-Z0-9_-]{20,28})');
+    final directMatch = directUcRegex.firstMatch(channelUrl);
+    if (directMatch != null) return directMatch.group(1);
+
+    String cleanUrl = channelUrl.split('?').first.trim();
+    if (cleanUrl.endsWith('/')) {
+      cleanUrl = cleanUrl.substring(0, cleanUrl.length - 1);
+    }
+
+    final List<String> urlsToTry = [
+      if (!cleanUrl.endsWith('/videos') && !cleanUrl.endsWith('/shorts'))
+        '$cleanUrl/videos',
+      cleanUrl,
+    ];
+
+    for (final u in urlsToTry) {
+      try {
+        final res = await http.get(
+          Uri.parse(u),
+          headers: {
+            'User-Agent':
+                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+            'Accept-Language': 'ar,en-US;q=0.9,en;q=0.8',
+            'Cookie': 'CONSENT=YES+cb.20230531-07-p0.en+FX+999',
+          },
+        ).timeout(const Duration(seconds: 9));
+
+        if (res.statusCode == 200) {
+          final html = utf8.decode(res.bodyBytes, allowMalformed: true);
+          final RegExp ucRegex = RegExp(
+              r'(?:"externalId"|"channelId"|"browseId"|channel_id=)\s*[:=]?\s*"?(UC[a-zA-Z0-9_-]{20,28})"?');
+          final m = ucRegex.firstMatch(html);
+          if (m != null && m.groupCount >= 1) {
+            return m.group(1);
+          }
+        }
+      } catch (_) {}
+    }
+    return null;
+  }
+
+  static Future<List<VideoModel>> _parseYouTubeXmlFeed(
+    String feedUrl, {
+    required int maxCount,
+    bool resolveFirstStreamImmediately = true,
+  }) async {
+    final List<VideoModel> results = [];
+    try {
+      final res = await http.get(
+        Uri.parse(feedUrl),
+        headers: {
+          'User-Agent':
+              'Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/124.0.0.0 Mobile Safari/537.36',
+        },
+      ).timeout(const Duration(seconds: 9));
+
+      if (res.statusCode == 200) {
+        final xml = utf8.decode(res.bodyBytes, allowMalformed: true);
+        final RegExp entryRegex =
+            RegExp(r'<entry>([\s\S]*?)<\/entry>', caseSensitive: false);
+        final matches = entryRegex.allMatches(xml).take(maxCount).toList();
+
+        for (int i = 0; i < matches.length; i++) {
+          final String entryXml = matches[i].group(1)!;
+          final vidMatch =
+              RegExp(r'<yt:videoId>([^<]+)<\/yt:videoId>').firstMatch(entryXml);
+          final titleMatch =
+              RegExp(r'<title>([\s\S]*?)<\/title>').firstMatch(entryXml);
+          final descMatch = RegExp(
+                  r'<media:description>([\s\S]*?)<\/media:description>')
+              .firstMatch(entryXml);
+
+          if (vidMatch != null) {
+            final String vidId = vidMatch.group(1)!.trim();
+            final String title =
+                _decodeHtmlEntities(titleMatch?.group(1) ?? '');
+            final String desc = _decodeHtmlEntities(descMatch?.group(1) ?? '');
+            final String watchUrl = 'https://www.youtube.com/watch?v=$vidId';
+
+            if (i == 0 && resolveFirstStreamImmediately) {
+              final resolved = await autoImportAndGenerateFromUrl(
+                watchUrl,
+                preFetchedTitle: title,
+                preFetchedDescription: desc,
+              );
+              if (resolved != null) {
+                results.add(resolved);
+                continue;
+              }
+            }
+
+            results.add(
+              _buildDeferredChannelVideoItem(
+                watchUrl: watchUrl,
+                rawTitle: title,
+                rawDescription: desc,
+                isVertical: false,
+                indexOffset: i,
+              ),
+            );
+          }
+        }
+      }
+    } catch (_) {}
+    return results;
+  }
+
   static Future<List<VideoModel>> autoImportChannelOrPlaylistFromUrl(
     String rawUrl, {
     int maxVideosToImport = 8,
   }) async {
-    final String trimmed = rawUrl.trim();
+    final String trimmed = await _resolveRedirectUrlIfNeeded(rawUrl.trim());
     final List<VideoModel> importedList = [];
 
     final String? ttUsername = extractTikTokUsernameFromProfile(trimmed);
     if (ttUsername != null) {
+      final List<String> usernameCandidates = [
+        ttUsername,
+        if (ttUsername.startsWith('@')) ttUsername.substring(1),
+      ];
+
+      for (final candidate in usernameCandidates) {
+        try {
+          final postRes = await http.post(
+            Uri.parse('https://www.tikwm.com/api/user/posts'),
+            headers: {
+              'Content-Type':
+                  'application/x-www-form-urlencoded; charset=UTF-8',
+              'User-Agent':
+                  'Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/124.0.0.0 Mobile Safari/537.36',
+            },
+            body: {
+              'unique_id': candidate,
+              'count': '12',
+              'cursor': '0',
+              'hd': '1',
+            },
+          ).timeout(const Duration(seconds: 12));
+
+          if (postRes.statusCode == 200) {
+            final decoded = jsonDecode(utf8.decode(postRes.bodyBytes));
+            if (decoded is Map &&
+                decoded['data'] is Map &&
+                (decoded['data'] as Map)['videos'] is List) {
+              final List<dynamic> vids =
+                  (decoded['data'] as Map)['videos'] as List<dynamic>;
+              for (final v in vids.take(maxVideosToImport)) {
+                if (v is Map) {
+                  final String rawCaption =
+                      stripPlatformMentions((v['title'] ?? '').toString());
+                  final String hdUrl = _normalizeAbsoluteTikwmUrl(
+                      (v['hdplay'] ?? v['play'] ?? v['wmplay'])?.toString());
+                  final String videoIdStr = (v['video_id'] ?? '').toString();
+                  if (hdUrl.startsWith('http')) {
+                    final sourceMeta = ImportedVideoSourceMetadata(
+                      title: rawCaption.split('\n').first.trim(),
+                      originalDescription: rawCaption,
+                      hdStreamUrl: hdUrl,
+                      sourceRawUrl: videoIdStr.isNotEmpty
+                          ? 'https://www.tiktok.com/@$candidate/video/$videoIdStr'
+                          : trimmed,
+                      qualityBadge: '1080p Full HD',
+                      isVerticalSource: true,
+                      resolvedRealStream: true,
+                    );
+                    final meta = classifyAndGeneratePedagogicalMetadata(
+                      rawUrl: trimmed,
+                      sourceMeta: sourceMeta,
+                    );
+                    importedList.add(
+                      VideoModel(
+                        id: 'v_ch_${DateTime.now().millisecondsSinceEpoch}_${importedList.length}',
+                        title: meta['title'] as String,
+                        description: meta['description'] as String,
+                        category: meta['category'] as String,
+                        ageGroup: meta['ageGroup'] as String,
+                        repeatPhrase: meta['repeatPhrase'] as String,
+                        activeActivity: meta['activeActivity'] as String,
+                        streamUrl: hdUrl,
+                        originalSourceUrl: sourceMeta.sourceRawUrl,
+                        bgGradientStart: meta['bgGradientStart'] as Color,
+                        bgGradientEnd: const Color(0xFF0F172A),
+                        emoji: meta['emoji'] as String,
+                        autoFitMode: 'auto_cover',
+                        qualityBadge: '1080p Full HD',
+                        likes: 160 + importedList.length * 12,
+                      ),
+                    );
+                  }
+                }
+              }
+            }
+          }
+        } catch (_) {}
+
+        if (importedList.isNotEmpty) return importedList;
+
+        try {
+          final getUri = Uri.parse(
+              'https://www.tikwm.com/api/user/posts?unique_id=${Uri.encodeComponent(candidate)}&count=12&cursor=0&hd=1');
+          final getRes = await http.get(
+            getUri,
+            headers: {
+              'User-Agent':
+                  'Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/124.0.0.0 Mobile Safari/537.36',
+            },
+          ).timeout(const Duration(seconds: 10));
+
+          if (getRes.statusCode == 200) {
+            final decoded = jsonDecode(utf8.decode(getRes.bodyBytes));
+            if (decoded is Map &&
+                decoded['data'] is Map &&
+                (decoded['data'] as Map)['videos'] is List) {
+              final List<dynamic> vids =
+                  (decoded['data'] as Map)['videos'] as List<dynamic>;
+              for (final v in vids.take(maxVideosToImport)) {
+                if (v is Map) {
+                  final String rawCaption =
+                      stripPlatformMentions((v['title'] ?? '').toString());
+                  final String hdUrl = _normalizeAbsoluteTikwmUrl(
+                      (v['hdplay'] ?? v['play'] ?? v['wmplay'])?.toString());
+                  final String videoIdStr = (v['video_id'] ?? '').toString();
+                  if (hdUrl.startsWith('http')) {
+                    final sourceMeta = ImportedVideoSourceMetadata(
+                      title: rawCaption.split('\n').first.trim(),
+                      originalDescription: rawCaption,
+                      hdStreamUrl: hdUrl,
+                      sourceRawUrl: videoIdStr.isNotEmpty
+                          ? 'https://www.tiktok.com/@$candidate/video/$videoIdStr'
+                          : trimmed,
+                      qualityBadge: '1080p Full HD',
+                      isVerticalSource: true,
+                      resolvedRealStream: true,
+                    );
+                    final meta = classifyAndGeneratePedagogicalMetadata(
+                      rawUrl: trimmed,
+                      sourceMeta: sourceMeta,
+                    );
+                    importedList.add(
+                      VideoModel(
+                        id: 'v_ch_${DateTime.now().millisecondsSinceEpoch}_${importedList.length}',
+                        title: meta['title'] as String,
+                        description: meta['description'] as String,
+                        category: meta['category'] as String,
+                        ageGroup: meta['ageGroup'] as String,
+                        repeatPhrase: meta['repeatPhrase'] as String,
+                        activeActivity: meta['activeActivity'] as String,
+                        streamUrl: hdUrl,
+                        originalSourceUrl: sourceMeta.sourceRawUrl,
+                        bgGradientStart: meta['bgGradientStart'] as Color,
+                        bgGradientEnd: const Color(0xFF0F172A),
+                        emoji: meta['emoji'] as String,
+                        autoFitMode: 'auto_cover',
+                        qualityBadge: '1080p Full HD',
+                        likes: 160 + importedList.length * 12,
+                      ),
+                    );
+                  }
+                }
+              }
+            }
+          }
+        } catch (_) {}
+
+        if (importedList.isNotEmpty) return importedList;
+      }
+
       try {
-        final postRes = await http.post(
-          Uri.parse('https://www.tikwm.com/api/user/posts'),
+        final searchRes = await http.post(
+          Uri.parse('https://www.tikwm.com/api/feed/search'),
           headers: {
             'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
             'User-Agent':
                 'Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/124.0.0.0 Mobile Safari/537.36',
           },
           body: {
-            'unique_id': ttUsername,
+            'keywords': ttUsername,
             'count': '$maxVideosToImport',
+            'cursor': '0',
             'hd': '1',
           },
-        ).timeout(const Duration(seconds: 12));
+        ).timeout(const Duration(seconds: 10));
 
-        if (postRes.statusCode == 200) {
-          final decoded = jsonDecode(utf8.decode(postRes.bodyBytes));
+        if (searchRes.statusCode == 200) {
+          final decoded = jsonDecode(utf8.decode(searchRes.bodyBytes));
           if (decoded is Map &&
               decoded['data'] is Map &&
               (decoded['data'] as Map)['videos'] is List) {
@@ -959,53 +1309,162 @@ class SmartVideoLinkAutoImporter {
     }
 
     if (isYouTubeUrl(trimmed)) {
-      final yt = yt_explode.YoutubeExplode();
-      try {
-        final String? playlistId = extractYouTubePlaylistId(trimmed);
-        if (playlistId != null) {
+      final String? playlistId = extractYouTubePlaylistId(trimmed);
+
+      if (playlistId != null) {
+        final xmlItems = await _parseYouTubeXmlFeed(
+          'https://www.youtube.com/feeds/videos.xml?playlist_id=$playlistId',
+          maxCount: maxVideosToImport,
+        );
+        if (xmlItems.isNotEmpty) return xmlItems;
+
+        final yt = yt_explode.YoutubeExplode();
+        try {
           final videosStream = yt.playlists
               .getVideos(yt_explode.PlaylistId(playlistId))
               .take(maxVideosToImport);
+          int idx = 0;
           await for (final v in videosStream) {
-            final imported =
-                await autoImportAndGenerateFromUrl(v.url);
-            if (imported != null) {
-              importedList.add(imported);
+            if (idx == 0) {
+              final resolved = await autoImportAndGenerateFromUrl(
+                v.url,
+                preFetchedTitle: v.title,
+                preFetchedDescription: v.description,
+              );
+              if (resolved != null) {
+                importedList.add(resolved);
+                idx++;
+                continue;
+              }
+            }
+            importedList.add(
+              _buildDeferredChannelVideoItem(
+                watchUrl: v.url,
+                rawTitle: v.title,
+                rawDescription: v.description,
+                isVertical: false,
+                indexOffset: idx,
+              ),
+            );
+            idx++;
+          }
+        } catch (_) {
+        } finally {
+          yt.close();
+        }
+        if (importedList.isNotEmpty) return importedList;
+      }
+
+      final String? channelId =
+          await _resolveYouTubeChannelIdFromAnyUrl(trimmed);
+      if (channelId != null) {
+        final xmlItems = await _parseYouTubeXmlFeed(
+          'https://www.youtube.com/feeds/videos.xml?channel_id=$channelId',
+          maxCount: maxVideosToImport,
+        );
+        if (xmlItems.isNotEmpty) return xmlItems;
+
+        final yt = yt_explode.YoutubeExplode();
+        try {
+          final uploads = await yt.channels
+              .getUploads(yt_explode.ChannelId(channelId))
+              .take(maxVideosToImport)
+              .toList()
+              .timeout(const Duration(seconds: 12));
+          for (int i = 0; i < uploads.length; i++) {
+            final v = uploads[i];
+            if (i == 0) {
+              final resolved = await autoImportAndGenerateFromUrl(
+                v.url,
+                preFetchedTitle: v.title,
+                preFetchedDescription: v.description,
+              );
+              if (resolved != null) {
+                importedList.add(resolved);
+                continue;
+              }
+            }
+            importedList.add(
+              _buildDeferredChannelVideoItem(
+                watchUrl: v.url,
+                rawTitle: v.title,
+                rawDescription: v.description,
+                isVertical: false,
+                indexOffset: i,
+              ),
+            );
+          }
+        } catch (_) {
+        } finally {
+          yt.close();
+        }
+        if (importedList.isNotEmpty) return importedList;
+      }
+
+      try {
+        String scrapeUrl = trimmed.split('?').first;
+        if (!scrapeUrl.endsWith('/videos') &&
+            !scrapeUrl.endsWith('/shorts') &&
+            !scrapeUrl.contains('watch')) {
+          scrapeUrl = '$scrapeUrl/videos';
+        }
+        final pageRes = await http.get(
+          Uri.parse(scrapeUrl),
+          headers: {
+            'User-Agent':
+                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36',
+            'Accept-Language': 'ar,en;q=0.9',
+            'Cookie': 'CONSENT=YES+cb.20230531-07-p0.en+FX+999',
+          },
+        ).timeout(const Duration(seconds: 9));
+
+        if (pageRes.statusCode == 200) {
+          final html = utf8.decode(pageRes.bodyBytes, allowMalformed: true);
+          final RegExp vidMatches = RegExp(r'"videoId":"([a-zA-Z0-9_-]{11})"');
+          final List<String> ids = [];
+          for (final m in vidMatches.allMatches(html)) {
+            final String id = m.group(1)!;
+            if (!ids.contains(id)) {
+              ids.add(id);
+              if (ids.length >= maxVideosToImport) break;
             }
           }
-        } else {
-          final pageRes = await http.get(
-            Uri.parse(trimmed),
-            headers: {
-              'User-Agent':
-                  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36',
-              'Accept-Language': 'ar,en;q=0.9',
-            },
-          ).timeout(const Duration(seconds: 9));
-          if (pageRes.statusCode == 200) {
-            final html = utf8.decode(pageRes.bodyBytes, allowMalformed: true);
-            final RegExp vidMatches = RegExp(r'"videoId":"([a-zA-Z0-9_-]{11})"');
-            final List<String> ids = [];
-            for (final m in vidMatches.allMatches(html)) {
-              final String id = m.group(1)!;
-              if (!ids.contains(id)) {
-                ids.add(id);
-                if (ids.length >= maxVideosToImport) break;
+          for (int i = 0; i < ids.length; i++) {
+            final String watchUrl = 'https://www.youtube.com/watch?v=${ids[i]}';
+            if (i == 0) {
+              final firstResolved =
+                  await autoImportAndGenerateFromUrl(watchUrl);
+              if (firstResolved != null) {
+                importedList.add(firstResolved);
+                continue;
               }
             }
-            for (final id in ids) {
-              final imported = await autoImportAndGenerateFromUrl(
-                  'https://www.youtube.com/watch?v=$id');
-              if (imported != null) {
-                importedList.add(imported);
+            String? quickTitle;
+            try {
+              final oembedRes = await http
+                  .get(Uri.parse(
+                      'https://www.youtube.com/oembed?url=${Uri.encodeComponent(watchUrl)}&format=json'))
+                  .timeout(const Duration(seconds: 4));
+              if (oembedRes.statusCode == 200) {
+                final data = jsonDecode(utf8.decode(oembedRes.bodyBytes));
+                if (data is Map) {
+                  quickTitle = data['title']?.toString().trim();
+                }
               }
-            }
+            } catch (_) {}
+            importedList.add(
+              _buildDeferredChannelVideoItem(
+                watchUrl: watchUrl,
+                rawTitle: quickTitle ?? 'قصة تربوية ممتعة (${i + 1})',
+                rawDescription: quickTitle ?? '',
+                isVertical: scrapeUrl.endsWith('/shorts'),
+                indexOffset: i,
+              ),
+            );
           }
         }
-      } catch (_) {
-      } finally {
-        yt.close();
-      }
+      } catch (_) {}
+
       if (importedList.isNotEmpty) return importedList;
     }
 
@@ -3074,7 +3533,7 @@ class AppStateManager extends ChangeNotifier {
     bool forceChannelOrPlaylistMode = false,
   }) async {
     final bool isMulti = forceChannelOrPlaylistMode ||
-        SmartVideoLinkAutoImporter.isChannelOrPlaylistUrl(rawUrl);
+        await SmartVideoLinkAutoImporter.detectIfChannelOrPlaylistUrl(rawUrl);
 
     if (isMulti) {
       final List<VideoModel> importedBatch =
@@ -5769,70 +6228,71 @@ class _VerticalVideoFeedPlayerScreenState
               children: [
                 Padding(
                   padding:
-                      const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
                   child: Row(
                     children: [
                       GestureDetector(
                         onTap: widget.appState.openChildProfilesScreen,
                         child: Container(
                           padding: const EdgeInsets.symmetric(
-                              horizontal: 10, vertical: 6),
+                              horizontal: 8, vertical: 4),
                           decoration: BoxDecoration(
-                            color: Colors.black.withOpacity(0.55),
-                            borderRadius: BorderRadius.circular(20),
-                            border: Border.all(color: Colors.white24),
+                            color: Colors.black.withOpacity(0.45),
+                            borderRadius: BorderRadius.circular(16),
+                            border: Border.all(color: Colors.white24, width: 0.8),
                           ),
                           child: Row(
                             mainAxisSize: MainAxisSize.min,
                             children: [
                               Text(activeChild.chosenAvatar,
-                                  style: const TextStyle(fontSize: 18)),
-                              const SizedBox(width: 6),
+                                  style: const TextStyle(fontSize: 14)),
+                              const SizedBox(width: 4),
                               Text(
                                 activeChild.name,
                                 style: const TextStyle(
                                   fontWeight: FontWeight.bold,
-                                  fontSize: 13,
+                                  fontSize: 11,
                                 ),
                               ),
-                              const SizedBox(width: 4),
-                              const Icon(Icons.swap_horiz, size: 16),
+                              const SizedBox(width: 3),
+                              const Icon(Icons.swap_horiz, size: 13),
                             ],
                           ),
                         ),
                       ),
-                      const SizedBox(width: 6),
+                      const SizedBox(width: 4),
                       Container(
                         padding: const EdgeInsets.symmetric(
-                            horizontal: 9, vertical: 6),
+                            horizontal: 7, vertical: 4),
                         decoration: BoxDecoration(
-                          color: Colors.black.withOpacity(0.55),
-                          borderRadius: BorderRadius.circular(20),
+                          color: Colors.black.withOpacity(0.45),
+                          borderRadius: BorderRadius.circular(16),
                           border: Border.all(
-                              color: const Color(0xFFF59E0B).withOpacity(0.5)),
+                              color: const Color(0xFFF59E0B).withOpacity(0.45),
+                              width: 0.8),
                         ),
                         child: Text(
                           '⭐ ${activeChild.starsEarned}',
                           style: const TextStyle(
                             fontWeight: FontWeight.bold,
-                            fontSize: 12,
+                            fontSize: 10.5,
                             color: Color(0xFFF59E0B),
                           ),
                         ),
                       ),
-                      const SizedBox(width: 6),
+                      const SizedBox(width: 4),
                       Container(
                         padding: const EdgeInsets.symmetric(
-                            horizontal: 9, vertical: 6),
+                            horizontal: 7, vertical: 4),
                         decoration: BoxDecoration(
-                          color: Colors.black.withOpacity(0.55),
-                          borderRadius: BorderRadius.circular(20),
-                          border: Border.all(color: Colors.white24),
+                          color: Colors.black.withOpacity(0.45),
+                          borderRadius: BorderRadius.circular(16),
+                          border: Border.all(color: Colors.white24, width: 0.8),
                         ),
                         child: Text(
                           '⏱️ ${activeChild.usedMinutesToday}/${activeChild.dailyTimeLimit}د',
                           style: const TextStyle(
-                            fontSize: 12,
+                            fontSize: 10.5,
                             color: Colors.white,
                           ),
                         ),
@@ -5842,20 +6302,20 @@ class _VerticalVideoFeedPlayerScreenState
                         onTap: _openBrainGamesHub,
                         child: Container(
                           padding: const EdgeInsets.symmetric(
-                              horizontal: 9, vertical: 6),
+                              horizontal: 7, vertical: 4),
                           decoration: BoxDecoration(
-                            color: const Color(0xFFA855F7).withOpacity(0.9),
-                            borderRadius: BorderRadius.circular(20),
+                            color: const Color(0xFFA855F7).withOpacity(0.82),
+                            borderRadius: BorderRadius.circular(16),
                           ),
                           child: Row(
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              const Text('🧠', style: TextStyle(fontSize: 13)),
-                              const SizedBox(width: 4),
+                              const Text('🧠', style: TextStyle(fontSize: 11)),
+                              const SizedBox(width: 3),
                               Text(
-                                'ألعاب الذكاء (${activeChild.intelligencePoints})',
+                                'الذكاء (${activeChild.intelligencePoints})',
                                 style: const TextStyle(
-                                  fontSize: 11,
+                                  fontSize: 10,
                                   fontWeight: FontWeight.bold,
                                   color: Colors.white,
                                 ),
@@ -5864,63 +6324,63 @@ class _VerticalVideoFeedPlayerScreenState
                           ),
                         ),
                       ),
-                      const SizedBox(width: 6),
+                      const SizedBox(width: 4),
                       GestureDetector(
                         onTap: _openSmartVoiceAssistantModal,
                         child: Container(
-                          padding: const EdgeInsets.all(7),
+                          padding: const EdgeInsets.all(5),
                           decoration: BoxDecoration(
-                            color: const Color(0xFF38BDF8).withOpacity(0.85),
+                            color: const Color(0xFF38BDF8).withOpacity(0.8),
                             shape: BoxShape.circle,
                           ),
                           child: const Icon(
                             Icons.assistant_rounded,
-                            size: 18,
+                            size: 14,
                             color: Colors.black87,
                           ),
                         ),
                       ),
-                      const SizedBox(width: 6),
+                      const SizedBox(width: 4),
                       GestureDetector(
                         onTap: () => widget.appState.toggleWarmEveningFilter(),
                         child: Container(
-                          padding: const EdgeInsets.all(7),
+                          padding: const EdgeInsets.all(5),
                           decoration: BoxDecoration(
                             color: account.warmEveningFilter
                                 ? const Color(0xFFF59E0B)
-                                : Colors.black.withOpacity(0.55),
+                                : Colors.black.withOpacity(0.45),
                             shape: BoxShape.circle,
-                            border: Border.all(color: Colors.white24),
+                            border: Border.all(color: Colors.white24, width: 0.8),
                           ),
                           child: Icon(
                             Icons.wb_twilight_rounded,
-                            size: 18,
+                            size: 14,
                             color: account.warmEveningFilter
                                 ? Colors.black87
                                 : Colors.white,
                           ),
                         ),
                       ),
-                      const SizedBox(width: 6),
+                      const SizedBox(width: 4),
                       GestureDetector(
                         onTap: () => _openParentalGateDialog(initialTab: 0),
                         child: Container(
                           padding: const EdgeInsets.symmetric(
-                              horizontal: 10, vertical: 6),
+                              horizontal: 8, vertical: 4),
                           decoration: BoxDecoration(
-                            color: const Color(0xFF14B8A6).withOpacity(0.9),
-                            borderRadius: BorderRadius.circular(20),
+                            color: const Color(0xFF14B8A6).withOpacity(0.85),
+                            borderRadius: BorderRadius.circular(16),
                           ),
                           child: const Row(
                             mainAxisSize: MainAxisSize.min,
                             children: [
                               Icon(Icons.lock_outline,
-                                  size: 14, color: Colors.white),
-                              SizedBox(width: 4),
+                                  size: 12, color: Colors.white),
+                              SizedBox(width: 3),
                               Text(
                                 'الوالدين',
                                 style: TextStyle(
-                                  fontSize: 12,
+                                  fontSize: 10.5,
                                   fontWeight: FontWeight.bold,
                                   color: Colors.white,
                                 ),
@@ -5934,10 +6394,10 @@ class _VerticalVideoFeedPlayerScreenState
                 ),
 
                 SizedBox(
-                  height: 38,
+                  height: 28,
                   child: ListView.builder(
                     scrollDirection: Axis.horizontal,
-                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    padding: const EdgeInsets.symmetric(horizontal: 10),
                     itemCount: kVideoCategories.length,
                     itemBuilder: (ctx, i) {
                       final cat = kVideoCategories[i];
@@ -5953,25 +6413,26 @@ class _VerticalVideoFeedPlayerScreenState
                           }
                         },
                         child: Container(
-                          margin: const EdgeInsets.symmetric(horizontal: 4),
+                          margin: const EdgeInsets.symmetric(horizontal: 3),
                           padding: const EdgeInsets.symmetric(
-                              horizontal: 14, vertical: 5),
+                              horizontal: 10, vertical: 3),
                           decoration: BoxDecoration(
                             color: isSelected
                                 ? const Color(0xFF14B8A6)
-                                : Colors.black.withOpacity(0.45),
-                            borderRadius: BorderRadius.circular(20),
+                                : Colors.black.withOpacity(0.38),
+                            borderRadius: BorderRadius.circular(14),
                             border: Border.all(
                               color: isSelected
                                   ? const Color(0xFF14B8A6)
                                   : Colors.white24,
+                              width: 0.8,
                             ),
                           ),
                           child: Center(
                             child: Text(
                               '${cat['icon']} ${cat['title']}',
                               style: TextStyle(
-                                fontSize: 13,
+                                fontSize: 11,
                                 fontWeight: isSelected
                                     ? FontWeight.bold
                                     : FontWeight.normal,
@@ -5987,50 +6448,52 @@ class _VerticalVideoFeedPlayerScreenState
 
                 Padding(
                   padding:
-                      const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
                   child: GestureDetector(
                     onTap: _openSmartVoiceAssistantModal,
                     child: Container(
                       padding: const EdgeInsets.symmetric(
-                          horizontal: 12, vertical: 8),
+                          horizontal: 9, vertical: 4),
                       decoration: BoxDecoration(
-                        color: const Color(0xFF1E293B).withOpacity(0.88),
-                        borderRadius: BorderRadius.circular(16),
+                        color: const Color(0xFF1E293B).withOpacity(0.76),
+                        borderRadius: BorderRadius.circular(12),
                         border: Border.all(
-                            color: const Color(0xFF38BDF8).withOpacity(0.6)),
+                            color: const Color(0xFF38BDF8).withOpacity(0.45),
+                            width: 0.8),
                       ),
                       child: Row(
                         children: [
-                          const Text('🤖🔊', style: TextStyle(fontSize: 18)),
-                          const SizedBox(width: 8),
+                          const Text('🤖', style: TextStyle(fontSize: 13)),
+                          const SizedBox(width: 6),
                           Expanded(
                             child: Text(
                               widget.appState.currentAssistantBannerMessage,
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                               style: const TextStyle(
-                                fontSize: 12,
+                                fontSize: 10.5,
                                 color: Colors.white,
                                 fontWeight: FontWeight.w600,
                               ),
                             ),
                           ),
-                          const SizedBox(width: 6),
+                          const SizedBox(width: 4),
                           GestureDetector(
                             onTap: () =>
                                 widget.appState.toggleVoiceAssistant(),
                             child: Container(
                               padding: const EdgeInsets.symmetric(
-                                  horizontal: 8, vertical: 4),
+                                  horizontal: 6, vertical: 2),
                               decoration: BoxDecoration(
                                 color: widget.appState.isAssistantVoiceMuted
-                                    ? Colors.redAccent.withOpacity(0.25)
-                                    : const Color(0xFF14B8A6).withOpacity(0.25),
-                                borderRadius: BorderRadius.circular(12),
+                                    ? Colors.redAccent.withOpacity(0.22)
+                                    : const Color(0xFF14B8A6).withOpacity(0.22),
+                                borderRadius: BorderRadius.circular(10),
                                 border: Border.all(
                                   color: widget.appState.isAssistantVoiceMuted
                                       ? Colors.redAccent
                                       : const Color(0xFF14B8A6),
+                                  width: 0.8,
                                 ),
                               ),
                               child: Row(
@@ -6040,18 +6503,18 @@ class _VerticalVideoFeedPlayerScreenState
                                     widget.appState.isAssistantVoiceMuted
                                         ? Icons.volume_off_rounded
                                         : Icons.volume_up_rounded,
-                                    size: 14,
+                                    size: 11,
                                     color: widget.appState.isAssistantVoiceMuted
                                         ? Colors.redAccent
                                         : const Color(0xFF14B8A6),
                                   ),
-                                  const SizedBox(width: 4),
+                                  const SizedBox(width: 3),
                                   Text(
                                     widget.appState.isAssistantVoiceMuted
                                         ? 'صامت'
-                                        : 'كتم المساعد',
+                                        : 'كتم',
                                     style: const TextStyle(
-                                      fontSize: 10,
+                                      fontSize: 9,
                                       fontWeight: FontWeight.bold,
                                       color: Colors.white,
                                     ),
@@ -6068,7 +6531,7 @@ class _VerticalVideoFeedPlayerScreenState
 
                 Padding(
                   padding:
-                      const EdgeInsets.symmetric(horizontal: 14, vertical: 2),
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 1),
                   child: CuteSuperheroCompanionBanner(
                     appState: widget.appState,
                     compactMode: true,
@@ -6634,21 +7097,21 @@ class _VerticalVideoFeedItemWidgetState
                 !_videoController!.value.isPlaying)
               Center(
                 child: Container(
-                  padding: const EdgeInsets.all(20),
+                  padding: const EdgeInsets.all(14),
                   decoration: BoxDecoration(
-                    color: Colors.black.withOpacity(0.55),
+                    color: Colors.black.withOpacity(0.45),
                     shape: BoxShape.circle,
                   ),
                   child: const Icon(
                     Icons.play_arrow_rounded,
-                    size: 56,
+                    size: 40,
                     color: Colors.white,
                   ),
                 ),
               ),
             Positioned(
-              left: 16,
-              bottom: 100,
+              left: 10,
+              bottom: 78,
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
@@ -6658,42 +7121,42 @@ class _VerticalVideoFeedItemWidgetState
                     label: '${item.likes}',
                     onTap: widget.onLikeTap,
                   ),
-                  const SizedBox(height: 14),
+                  const SizedBox(height: 8),
                   _SideActionButton(
                     icon: Icons.mic_rounded,
                     iconColor: const Color(0xFFF59E0B),
                     label: 'ردد معي',
                     onTap: widget.onRepeatPhraseTap,
                   ),
-                  const SizedBox(height: 14),
+                  const SizedBox(height: 8),
                   _SideActionButton(
                     icon: Icons.emoji_events_rounded,
                     iconColor: const Color(0xFF14B8A6),
                     label: 'نشاط البطل',
                     onTap: widget.onHeroActivityTap,
                   ),
-                  const SizedBox(height: 14),
+                  const SizedBox(height: 8),
                   _SideActionButton(
                     icon: Icons.psychology_rounded,
                     iconColor: const Color(0xFFC084FC),
                     label: 'ألعاب الذكاء',
                     onTap: widget.onBrainGamesTap,
                   ),
-                  const SizedBox(height: 12),
+                  const SizedBox(height: 8),
                   _SideActionButton(
                     icon: Icons.assistant_rounded,
                     iconColor: const Color(0xFF38BDF8),
                     label: 'مساعد ذكي',
                     onTap: widget.onVoiceAssistantTap,
                   ),
-                  const SizedBox(height: 12),
+                  const SizedBox(height: 8),
                   _SideActionButton(
                     icon: Icons.aspect_ratio_rounded,
                     iconColor: const Color(0xFFA7F3D0),
                     label: _fitModeLabel(),
                     onTap: _cycleVideoFitMode,
                   ),
-                  const SizedBox(height: 12),
+                  const SizedBox(height: 8),
                   _SideActionButton(
                     icon: _isMuted ? Icons.volume_off : Icons.volume_up,
                     iconColor: Colors.white,
@@ -6704,30 +7167,30 @@ class _VerticalVideoFeedItemWidgetState
               ),
             ),
             Positioned(
-              right: 16,
-              left: 88,
-              bottom: 28,
+              right: 12,
+              left: 68,
+              bottom: 18,
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Wrap(
-                    spacing: 8,
-                    runSpacing: 6,
+                    spacing: 6,
+                    runSpacing: 4,
                     children: [
                       Container(
                         padding: const EdgeInsets.symmetric(
-                            horizontal: 10, vertical: 4),
+                            horizontal: 8, vertical: 2),
                         decoration: BoxDecoration(
-                          color: const Color(0xFF14B8A6).withOpacity(0.25),
-                          borderRadius: BorderRadius.circular(10),
+                          color: const Color(0xFF14B8A6).withOpacity(0.22),
+                          borderRadius: BorderRadius.circular(8),
                           border: Border.all(
-                              color: const Color(0xFF14B8A6).withOpacity(0.6)),
+                              color: const Color(0xFF14B8A6).withOpacity(0.5)),
                         ),
                         child: Text(
                           VideoModel.getCategoryDisplayLabel(item.category),
                           style: const TextStyle(
-                            fontSize: 12,
+                            fontSize: 10.5,
                             fontWeight: FontWeight.bold,
                             color: Colors.white,
                           ),
@@ -6735,32 +7198,32 @@ class _VerticalVideoFeedItemWidgetState
                       ),
                       Container(
                         padding: const EdgeInsets.symmetric(
-                            horizontal: 10, vertical: 4),
+                            horizontal: 8, vertical: 2),
                         decoration: BoxDecoration(
                           color: Colors.white.withOpacity(0.12),
-                          borderRadius: BorderRadius.circular(10),
+                          borderRadius: BorderRadius.circular(8),
                         ),
                         child: Text(
                           '🎂 ${item.ageGroup}',
                           style: const TextStyle(
-                            fontSize: 12,
+                            fontSize: 10.5,
                             color: Colors.white,
                           ),
                         ),
                       ),
                       Container(
                         padding: const EdgeInsets.symmetric(
-                            horizontal: 8, vertical: 4),
+                            horizontal: 6, vertical: 2),
                         decoration: BoxDecoration(
-                          color: const Color(0xFFF59E0B).withOpacity(0.25),
-                          borderRadius: BorderRadius.circular(10),
+                          color: const Color(0xFFF59E0B).withOpacity(0.22),
+                          borderRadius: BorderRadius.circular(8),
                           border: Border.all(
-                              color: const Color(0xFFF59E0B).withOpacity(0.7)),
+                              color: const Color(0xFFF59E0B).withOpacity(0.6)),
                         ),
                         child: Text(
                           '✨ ${_liveResolutionLabel()}',
                           style: const TextStyle(
-                            fontSize: 11,
+                            fontSize: 10,
                             fontWeight: FontWeight.bold,
                             color: Color(0xFFFDE68A),
                           ),
@@ -6768,53 +7231,57 @@ class _VerticalVideoFeedItemWidgetState
                       ),
                     ],
                   ),
-                  const SizedBox(height: 10),
+                  const SizedBox(height: 6),
                   Text(
                     item.title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                     style: const TextStyle(
-                      fontSize: 20,
+                      fontSize: 16,
                       fontWeight: FontWeight.bold,
                       color: Colors.white,
                     ),
                   ),
-                  const SizedBox(height: 6),
+                  const SizedBox(height: 4),
                   GestureDetector(
                     onTap: () => setState(
                         () => _showFullDescription = !_showFullDescription),
                     child: Text(
                       item.description,
-                      maxLines: _showFullDescription ? 12 : 3,
+                      maxLines: _showFullDescription ? 10 : 2,
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(
-                        fontSize: 14,
-                        height: 1.45,
+                        fontSize: 12,
+                        height: 1.35,
                         color: Colors.white,
                       ),
                     ),
                   ),
-                  const SizedBox(height: 10),
+                  const SizedBox(height: 6),
                   GestureDetector(
                     onTap: widget.onRepeatPhraseTap,
                     child: Container(
                       padding: const EdgeInsets.symmetric(
-                          horizontal: 12, vertical: 8),
+                          horizontal: 9, vertical: 5),
                       decoration: BoxDecoration(
-                        color: const Color(0xFFF59E0B).withOpacity(0.18),
-                        borderRadius: BorderRadius.circular(12),
+                        color: const Color(0xFFF59E0B).withOpacity(0.16),
+                        borderRadius: BorderRadius.circular(10),
                         border: Border.all(
-                            color: const Color(0xFFF59E0B).withOpacity(0.5)),
+                            color: const Color(0xFFF59E0B).withOpacity(0.45)),
                       ),
                       child: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
                           const Icon(Icons.mic,
-                              size: 16, color: Color(0xFFFDE68A)),
-                          const SizedBox(width: 6),
+                              size: 13, color: Color(0xFFFDE68A)),
+                          const SizedBox(width: 4),
                           Flexible(
                             child: Text(
-                              'ردد معي بصوت هادئ: ${item.repeatPhrase}',
+                              'ردد معي: ${item.repeatPhrase}',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
                               style: const TextStyle(
-                                fontSize: 13,
+                                fontSize: 11.5,
                                 fontWeight: FontWeight.bold,
                                 color: Color(0xFFFDE68A),
                               ),
@@ -6867,22 +7334,23 @@ class _SideActionButton extends StatelessWidget {
     return GestureDetector(
       onTap: onTap,
       child: Column(
+        mainAxisSize: MainAxisSize.min,
         children: [
           Container(
-            padding: const EdgeInsets.all(11),
+            padding: const EdgeInsets.all(7),
             decoration: BoxDecoration(
-              color: Colors.black.withOpacity(0.5),
+              color: Colors.black.withOpacity(0.38),
               shape: BoxShape.circle,
-              border: Border.all(color: Colors.white24),
+              border: Border.all(color: Colors.white24, width: 0.8),
             ),
-            child: Icon(icon, color: iconColor, size: 24),
+            child: Icon(icon, color: iconColor, size: 18),
           ),
-          const SizedBox(height: 4),
+          const SizedBox(height: 2),
           Text(
             label,
             style: const TextStyle(
-              fontSize: 11,
-              fontWeight: FontWeight.bold,
+              fontSize: 9.5,
+              fontWeight: FontWeight.w600,
               color: Colors.white,
             ),
           ),
@@ -9986,94 +10454,111 @@ class _CuteSuperheroCompanionBannerState
       onTap: _openHeroFriendsGalleryModal,
       child: Container(
         padding: EdgeInsets.symmetric(
-          horizontal: 12,
-          vertical: widget.compactMode ? 7 : 10,
+          horizontal: widget.compactMode ? 9 : 12,
+          vertical: widget.compactMode ? 4 : 10,
         ),
         decoration: BoxDecoration(
           gradient: LinearGradient(
             colors: [
-              hero.primaryColor.withOpacity(0.32),
-              hero.secondaryColor.withOpacity(0.25),
-              const Color(0xFF1E293B).withOpacity(0.92),
+              hero.primaryColor.withOpacity(widget.compactMode ? 0.24 : 0.32),
+              hero.secondaryColor.withOpacity(widget.compactMode ? 0.18 : 0.25),
+              const Color(0xFF1E293B).withOpacity(widget.compactMode ? 0.78 : 0.92),
             ],
           ),
-          borderRadius: BorderRadius.circular(18),
-          border: Border.all(color: hero.primaryColor.withOpacity(0.75), width: 1.5),
+          borderRadius: BorderRadius.circular(widget.compactMode ? 12 : 18),
+          border: Border.all(
+            color: hero.primaryColor.withOpacity(0.6),
+            width: widget.compactMode ? 0.9 : 1.5,
+          ),
         ),
         child: Row(
           children: [
             GestureDetector(
               onTap: _cycleNextHero,
               child: Container(
-                padding: const EdgeInsets.all(6),
+                padding: EdgeInsets.all(widget.compactMode ? 4 : 6),
                 decoration: BoxDecoration(
-                  color: hero.primaryColor.withOpacity(0.25),
+                  color: hero.primaryColor.withOpacity(0.22),
                   shape: BoxShape.circle,
-                  border: Border.all(color: hero.primaryColor),
+                  border: Border.all(color: hero.primaryColor, width: 0.8),
                 ),
                 child: Text(
                   hero.avatarEmoji,
-                  style: TextStyle(fontSize: widget.compactMode ? 20 : 26),
+                  style: TextStyle(fontSize: widget.compactMode ? 14 : 26),
                 ),
               ),
             ),
-            const SizedBox(width: 10),
+            SizedBox(width: widget.compactMode ? 6 : 10),
             Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Row(
-                    children: [
-                      Text(
-                        hero.nameAr,
-                        style: TextStyle(
-                          fontSize: widget.compactMode ? 11 : 13,
-                          fontWeight: FontWeight.bold,
-                          color: const Color(0xFFFDE68A),
-                        ),
+              child: widget.compactMode
+                  ? Text(
+                      '${hero.nameAr}: $message',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 10,
+                        color: Colors.white,
+                        fontWeight: FontWeight.w600,
                       ),
-                      const SizedBox(width: 6),
-                      Flexible(
-                        child: Text(
-                          '• ${hero.titleBadge}',
-                          maxLines: 1,
+                    )
+                  : Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Row(
+                          children: [
+                            Text(
+                              hero.nameAr,
+                              style: const TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.bold,
+                                color: Color(0xFFFDE68A),
+                              ),
+                            ),
+                            const SizedBox(width: 6),
+                            Flexible(
+                              child: Text(
+                                '• ${hero.titleBadge}',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                  fontSize: 10,
+                                  color: Colors.white70,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          '💬 $message',
+                          maxLines: 2,
                           overflow: TextOverflow.ellipsis,
                           style: const TextStyle(
-                            fontSize: 10,
-                            color: Colors.white70,
+                            fontSize: 12,
+                            color: Colors.white,
+                            fontWeight: FontWeight.w600,
                           ),
                         ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    '💬 $message',
-                    maxLines: widget.compactMode ? 1 : 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontSize: widget.compactMode ? 11 : 12,
-                      color: Colors.white,
-                      fontWeight: FontWeight.w600,
+                      ],
                     ),
-                  ),
-                ],
-              ),
             ),
-            const SizedBox(width: 6),
+            const SizedBox(width: 4),
             GestureDetector(
               onTap: _cycleNextHero,
               child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                padding: EdgeInsets.symmetric(
+                  horizontal: widget.compactMode ? 6 : 8,
+                  vertical: widget.compactMode ? 2 : 4,
+                ),
                 decoration: BoxDecoration(
                   color: Colors.black26,
-                  borderRadius: BorderRadius.circular(12),
+                  borderRadius: BorderRadius.circular(10),
                 ),
-                child: const Text(
-                  'بطل آخر 🔄',
+                child: Text(
+                  widget.compactMode ? '🔄' : 'بطل آخر 🔄',
                   style: TextStyle(
-                    fontSize: 10,
+                    fontSize: widget.compactMode ? 10 : 10,
                     color: Colors.white,
                     fontWeight: FontWeight.bold,
                   ),
