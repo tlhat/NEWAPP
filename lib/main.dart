@@ -242,6 +242,7 @@ class ImportedVideoSourceMetadata {
   final String? originalDescription;
   final String? authorName;
   final String? hdStreamUrl;
+  final String? separateAudioStreamUrl;
   final String sourceRawUrl;
   final String qualityBadge;
   final bool isVerticalSource;
@@ -252,6 +253,7 @@ class ImportedVideoSourceMetadata {
     this.originalDescription,
     this.authorName,
     this.hdStreamUrl,
+    this.separateAudioStreamUrl,
     required this.sourceRawUrl,
     this.qualityBadge = '1080p Full HD',
     this.isVerticalSource = true,
@@ -315,8 +317,14 @@ class SmartVideoLinkAutoImporter {
 
   static String? extractTikTokUsernameFromProfile(String url) {
     final String trimmed = Uri.decodeFull(url.trim());
+    if (trimmed.startsWith('@') && !trimmed.contains('/')) {
+      return trimmed.substring(1).trim();
+    }
     if (!isTikTokUrl(trimmed)) return null;
-    if (trimmed.toLowerCase().contains('/video/')) return null;
+    if (trimmed.toLowerCase().contains('/video/') ||
+        trimmed.toLowerCase().contains('/photo/')) {
+      return null;
+    }
     final RegExp profileRegex =
         RegExp(r'tiktok\.com\/@([a-zA-Z0-9_.-]+)', caseSensitive: false);
     final match = profileRegex.firstMatch(trimmed);
@@ -327,17 +335,21 @@ class SmartVideoLinkAutoImporter {
   }
 
   static Future<String> _resolveRedirectUrlIfNeeded(String rawUrl) async {
-    final String trimmed = rawUrl.trim();
-    final String lower = trimmed.toLowerCase();
+    String currentUrl = rawUrl.trim();
+    if (currentUrl.startsWith('@') && !currentUrl.contains('/')) {
+      return 'https://www.tiktok.com/$currentUrl';
+    }
+    final String lower = currentUrl.toLowerCase();
     if (!lower.contains('vm.tiktok.com') &&
         !lower.contains('vt.tiktok.com') &&
         !lower.contains('tiktok.com/t/')) {
-      return trimmed;
+      return currentUrl;
     }
+
+    final client = http.Client();
     try {
-      final client = http.Client();
-      try {
-        final req = http.Request('GET', Uri.parse(trimmed))
+      for (int hop = 0; hop < 5; hop++) {
+        final req = http.Request('GET', Uri.parse(currentUrl))
           ..followRedirects = false
           ..headers['User-Agent'] =
               'Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/124.0.0.0 Mobile Safari/537.36';
@@ -345,13 +357,24 @@ class SmartVideoLinkAutoImporter {
             await client.send(req).timeout(const Duration(seconds: 6));
         final String? loc = streamed.headers['location'];
         if (loc != null && loc.isNotEmpty) {
-          if (loc.startsWith('http')) return loc;
+          if (loc.startsWith('http')) {
+            currentUrl = loc;
+          } else if (loc.startsWith('/')) {
+            final uri = Uri.parse(currentUrl);
+            currentUrl = '${uri.scheme}://${uri.host}$loc';
+          }
+          if (currentUrl.contains('/@') || currentUrl.contains('/video/')) {
+            break;
+          }
+        } else {
+          break;
         }
-      } finally {
-        client.close();
       }
-    } catch (_) {}
-    return trimmed;
+    } catch (_) {
+    } finally {
+      client.close();
+    }
+    return currentUrl;
   }
 
   static Future<bool> detectIfChannelOrPlaylistUrl(String rawUrl) async {
@@ -372,7 +395,7 @@ class SmartVideoLinkAutoImporter {
 
   static bool isTikTokUrl(String url) {
     final lower = url.toLowerCase();
-    return lower.contains('tiktok.com');
+    return lower.contains('tiktok.com') || lower.startsWith('@');
   }
 
   static String _decodeHtmlEntities(String text) {
@@ -384,6 +407,7 @@ class SmartVideoLinkAutoImporter {
         .replaceAll('&lt;', '<')
         .replaceAll('&gt;', '>')
         .replaceAll(r'\u002F', '/')
+        .replaceAll(r'\u0026', '&')
         .replaceAll(r'\n', '\n')
         .replaceAll(r'\"', '"')
         .trim();
@@ -396,6 +420,51 @@ class SmartVideoLinkAutoImporter {
     if (u.startsWith('//')) return 'https:$u';
     if (u.startsWith('/')) return 'https://www.tikwm.com$u';
     return 'https://www.tikwm.com/$u';
+  }
+
+  static List<Map<String, String>> _extractTikwmVideoListFromResponse(
+      dynamic decoded) {
+    final List<Map<String, String>> results = [];
+    if (decoded is! Map) return results;
+    final dynamic dataNode = decoded['data'];
+    List<dynamic>? rawList;
+    if (dataNode is Map) {
+      if (dataNode['videos'] is List) {
+        rawList = dataNode['videos'] as List<dynamic>;
+      } else if (dataNode['itemList'] is List) {
+        rawList = dataNode['itemList'] as List<dynamic>;
+      }
+    } else if (dataNode is List) {
+      rawList = dataNode;
+    }
+    if (rawList == null) return results;
+
+    for (final v in rawList) {
+      if (v is Map) {
+        final String rawCaption =
+            stripPlatformMentions((v['title'] ?? v['desc'] ?? '').toString());
+        final String hdPlay =
+            _normalizeAbsoluteTikwmUrl(v['hdplay']?.toString());
+        final String play = _normalizeAbsoluteTikwmUrl(v['play']?.toString());
+        final String wmPlay =
+            _normalizeAbsoluteTikwmUrl(v['wmplay']?.toString());
+        final String bestUrl = hdPlay.startsWith('http')
+            ? hdPlay
+            : (play.startsWith('http') ? play : wmPlay);
+        final String videoIdStr =
+            (v['video_id'] ?? v['aweme_id'] ?? v['id'] ?? '').toString();
+        if (bestUrl.startsWith('http')) {
+          results.add({
+            'title': rawCaption.split('\n').first.trim(),
+            'description': rawCaption,
+            'streamUrl': bestUrl,
+            'videoId': videoIdStr,
+            'badge': hdPlay.startsWith('http') ? '1080p Full HD' : '720p HD',
+          });
+        }
+      }
+    }
+    return results;
   }
 
   static Future<ImportedVideoSourceMetadata> fetchHighDefStreamAndExactMetadata(
@@ -559,6 +628,7 @@ class SmartVideoLinkAutoImporter {
       String? ytDesc;
       String? ytAuthor;
       String? bestStreamUrl;
+      String? separateAudioUrl;
       String badge = '1080p Full HD';
       bool isVertical = trimmed.toLowerCase().contains('/shorts/');
 
@@ -577,7 +647,43 @@ class SmartVideoLinkAutoImporter {
             .getManifest(videoId)
             .timeout(const Duration(seconds: 12));
 
-        if (manifest.muxed.isNotEmpty) {
+        final mp4VideoOnlyList = manifest.videoOnly
+            .where((s) => s.container.name.toLowerCase() == 'mp4')
+            .toList()
+          ..sort((a, b) {
+            final cmpRes = b.videoResolution.height
+                .compareTo(a.videoResolution.height);
+            if (cmpRes != 0) return cmpRes;
+            return b.bitrate.bitsPerSecond.compareTo(a.bitrate.bitsPerSecond);
+          });
+
+        if (mp4VideoOnlyList.isNotEmpty && manifest.audioOnly.isNotEmpty) {
+          final bestVo = mp4VideoOnlyList.firstWhere(
+            (s) => s.videoResolution.height <= 1920,
+            orElse: () => mp4VideoOnlyList.first,
+          );
+          final bestAo = manifest.audioOnly.withHighestBitrate();
+          final int h = bestVo.videoResolution.height;
+          final int w = bestVo.videoResolution.width;
+          if (h > w) isVertical = true;
+
+          if (h >= 720) {
+            bestStreamUrl = bestVo.url.toString();
+            separateAudioUrl = bestAo.url.toString();
+            final int shortSide = min(w, h);
+            badge = shortSide >= 1080
+                ? '1080p Full HD'
+                : (shortSide >= 720 ? '720p HD' : '${h}p HD');
+          }
+        }
+
+        if (bestStreamUrl == null && manifest.hls.isNotEmpty) {
+          final bestHls = manifest.hls.withHighestBitrate();
+          bestStreamUrl = bestHls.url.toString();
+          badge = '1080p Adaptive HLS';
+        }
+
+        if (bestStreamUrl == null && manifest.muxed.isNotEmpty) {
           final bestMuxed = manifest.muxed.withHighestBitrate();
           bestStreamUrl = bestMuxed.url.toString();
           final int h = bestMuxed.videoResolution.height;
@@ -586,10 +692,6 @@ class SmartVideoLinkAutoImporter {
             isVertical = true;
           }
           badge = h >= 720 ? '${h}p Full HD' : '${h}p HD';
-        } else if (manifest.hls.isNotEmpty) {
-          final bestHls = manifest.hls.withHighestBitrate();
-          bestStreamUrl = bestHls.url.toString();
-          badge = '1080p HLS';
         }
       } catch (_) {
       } finally {
@@ -614,23 +716,18 @@ class SmartVideoLinkAutoImporter {
                 if (decoded is Map) {
                   ytTitle ??= decoded['title']?.toString().trim();
                   ytDesc ??= decoded['description']?.toString().trim();
+                  if (decoded['hls'] != null &&
+                      decoded['hls'].toString().startsWith('http')) {
+                    bestStreamUrl = decoded['hls'].toString();
+                    badge = '1080p Adaptive HLS';
+                    break;
+                  }
                   if (decoded['formatStreams'] is List) {
                     for (final fs in (decoded['formatStreams'] as List)) {
                       if (fs is Map &&
                           fs['url'] != null &&
                           fs['url'].toString().startsWith('http')) {
                         bestStreamUrl = fs['url'].toString();
-                        break;
-                      }
-                    }
-                  }
-                  if (bestStreamUrl == null &&
-                      decoded['videoStreams'] is List) {
-                    for (final s in (decoded['videoStreams'] as List)) {
-                      if (s is Map &&
-                          s['videoOnly'] == false &&
-                          s['url'] != null) {
-                        bestStreamUrl = s['url'].toString();
                         break;
                       }
                     }
@@ -664,6 +761,7 @@ class SmartVideoLinkAutoImporter {
         originalDescription: ytDesc,
         authorName: ytAuthor,
         hdStreamUrl: bestStreamUrl,
+        separateAudioStreamUrl: separateAudioUrl,
         sourceRawUrl: trimmed,
         qualityBadge: badge,
         isVerticalSource: isVertical,
@@ -893,6 +991,7 @@ class SmartVideoLinkAutoImporter {
       originalDescription: finalDesc,
       authorName: fetchedMeta.authorName,
       hdStreamUrl: fetchedMeta.hdStreamUrl,
+      separateAudioStreamUrl: fetchedMeta.separateAudioStreamUrl,
       sourceRawUrl: cleanUrl,
       qualityBadge: fetchedMeta.qualityBadge,
       isVerticalSource: fetchedMeta.isVerticalSource,
@@ -914,6 +1013,7 @@ class SmartVideoLinkAutoImporter {
       repeatPhrase: meta['repeatPhrase'] as String,
       activeActivity: meta['activeActivity'] as String,
       streamUrl: fetchedMeta.hdStreamUrl ?? cleanUrl,
+      audioStreamUrl: fetchedMeta.separateAudioStreamUrl ?? '',
       originalSourceUrl: cleanUrl,
       bgGradientStart: meta['bgGradientStart'] as Color,
       bgGradientEnd: const Color(0xFF0F172A),
@@ -930,15 +1030,17 @@ class SmartVideoLinkAutoImporter {
     required String rawDescription,
     required bool isVertical,
     required int indexOffset,
+    String? directStreamUrl,
+    String badge = '1080p Full HD',
   }) {
     final sourceMeta = ImportedVideoSourceMetadata(
       title: rawTitle,
       originalDescription: rawDescription.isNotEmpty ? rawDescription : rawTitle,
-      hdStreamUrl: null,
+      hdStreamUrl: directStreamUrl,
       sourceRawUrl: watchUrl,
-      qualityBadge: '1080p Full HD',
+      qualityBadge: badge,
       isVerticalSource: isVertical,
-      resolvedRealStream: false,
+      resolvedRealStream: directStreamUrl != null,
     );
     final meta = classifyAndGeneratePedagogicalMetadata(
       rawUrl: watchUrl,
@@ -952,13 +1054,13 @@ class SmartVideoLinkAutoImporter {
       ageGroup: meta['ageGroup'] as String,
       repeatPhrase: meta['repeatPhrase'] as String,
       activeActivity: meta['activeActivity'] as String,
-      streamUrl: watchUrl,
+      streamUrl: directStreamUrl ?? watchUrl,
       originalSourceUrl: watchUrl,
       bgGradientStart: meta['bgGradientStart'] as Color,
       bgGradientEnd: const Color(0xFF0F172A),
       emoji: meta['emoji'] as String,
       autoFitMode: meta['autoFitMode'] as String,
-      qualityBadge: '1080p Full HD',
+      qualityBadge: badge,
       likes: 165 + indexOffset * 9,
     );
   }
@@ -1073,6 +1175,92 @@ class SmartVideoLinkAutoImporter {
     return results;
   }
 
+  static Future<List<VideoModel>> _scrapeTikTokProfilePageDirectly(
+    String username, {
+    required int maxVideosToImport,
+  }) async {
+    final List<VideoModel> scrapedList = [];
+    final String cleanUser =
+        username.startsWith('@') ? username.substring(1) : username;
+    final String profileUrl = 'https://www.tiktok.com/@$cleanUser';
+
+    try {
+      final res = await http.get(
+        Uri.parse(profileUrl),
+        headers: {
+          'User-Agent':
+              'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+          'Accept':
+              'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+          'Accept-Language': 'ar,en-US;q=0.9,en;q=0.8',
+        },
+      ).timeout(const Duration(seconds: 9));
+
+      if (res.statusCode == 200) {
+        final String html = utf8.decode(res.bodyBytes, allowMalformed: true);
+        final Set<String> discoveredVideoIds = {};
+
+        final RegExp urlVidRegex =
+            RegExp(r'\/@[a-zA-Z0-9_.-]+\/video\/(\d{15,22})');
+        for (final m in urlVidRegex.allMatches(html)) {
+          discoveredVideoIds.add(m.group(1)!);
+          if (discoveredVideoIds.length >= maxVideosToImport) break;
+        }
+
+        if (discoveredVideoIds.isEmpty) {
+          final RegExp itemIdRegex =
+              RegExp(r'"(?:id|video_id|aweme_id)"\s*:\s*"(\d{18,20})"');
+          for (final m in itemIdRegex.allMatches(html)) {
+            discoveredVideoIds.add(m.group(1)!);
+            if (discoveredVideoIds.length >= maxVideosToImport) break;
+          }
+        }
+
+        final List<String> idList =
+            discoveredVideoIds.take(maxVideosToImport).toList();
+        for (int i = 0; i < idList.length; i++) {
+          final String vidId = idList[i];
+          final String videoUrl =
+              'https://www.tiktok.com/@$cleanUser/video/$vidId';
+          if (i == 0) {
+            final firstResolved =
+                await autoImportAndGenerateFromUrl(videoUrl);
+            if (firstResolved != null) {
+              scrapedList.add(firstResolved);
+              continue;
+            }
+          }
+          String? oembedTitle;
+          try {
+            final oRes = await http
+                .get(Uri.parse(
+                    'https://www.tiktok.com/oembed?url=${Uri.encodeComponent(videoUrl)}'))
+                .timeout(const Duration(seconds: 4));
+            if (oRes.statusCode == 200) {
+              final data = jsonDecode(utf8.decode(oRes.bodyBytes));
+              if (data is Map) {
+                oembedTitle = data['title']?.toString().trim();
+              }
+            }
+          } catch (_) {}
+
+          scrapedList.add(
+            _buildDeferredChannelVideoItem(
+              watchUrl: videoUrl,
+              rawTitle: oembedTitle?.split('\n').first.trim() ??
+                  'قصة تربوية ممتعة (${i + 1})',
+              rawDescription: oembedTitle ?? '',
+              isVertical: true,
+              indexOffset: i,
+            ),
+          );
+        }
+      }
+    } catch (_) {}
+
+    return scrapedList;
+  }
+
   static Future<List<VideoModel>> autoImportChannelOrPlaylistFromUrl(
     String rawUrl, {
     int maxVideosToImport = 8,
@@ -1082,12 +1270,56 @@ class SmartVideoLinkAutoImporter {
 
     final String? ttUsername = extractTikTokUsernameFromProfile(trimmed);
     if (ttUsername != null) {
-      final List<String> usernameCandidates = [
-        ttUsername,
-        if (ttUsername.startsWith('@')) ttUsername.substring(1),
+      final String cleanUser =
+          ttUsername.startsWith('@') ? ttUsername.substring(1) : ttUsername;
+      String? resolvedSecUid;
+      String? resolvedUserId;
+
+      try {
+        final infoRes = await http.post(
+          Uri.parse('https://www.tikwm.com/api/user/info'),
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+            'User-Agent':
+                'Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/124.0.0.0 Mobile Safari/537.36',
+          },
+          body: {'unique_id': cleanUser},
+        ).timeout(const Duration(seconds: 8));
+
+        if (infoRes.statusCode == 200) {
+          final decoded = jsonDecode(utf8.decode(infoRes.bodyBytes));
+          if (decoded is Map &&
+              decoded['data'] is Map &&
+              (decoded['data'] as Map)['user'] is Map) {
+            final userMap = (decoded['data'] as Map)['user'] as Map;
+            resolvedSecUid = userMap['secUid']?.toString();
+            resolvedUserId = userMap['id']?.toString();
+          }
+        }
+      } catch (_) {}
+
+      await Future.delayed(const Duration(milliseconds: 1150));
+
+      final List<Map<String, String>> postPayloads = [
+        {
+          'unique_id': cleanUser,
+          if (resolvedSecUid != null && resolvedSecUid.isNotEmpty)
+            'secUid': resolvedSecUid,
+          if (resolvedUserId != null && resolvedUserId.isNotEmpty)
+            'user_id': resolvedUserId,
+          'count': '12',
+          'cursor': '0',
+          'hd': '1',
+        },
+        {
+          'unique_id': '@$cleanUser',
+          'count': '12',
+          'cursor': '0',
+          'hd': '1',
+        },
       ];
 
-      for (final candidate in usernameCandidates) {
+      for (final bodyMap in postPayloads) {
         try {
           final postRes = await http.post(
             Uri.parse('https://www.tikwm.com/api/user/posts'),
@@ -1097,140 +1329,36 @@ class SmartVideoLinkAutoImporter {
               'User-Agent':
                   'Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/124.0.0.0 Mobile Safari/537.36',
             },
-            body: {
-              'unique_id': candidate,
-              'count': '12',
-              'cursor': '0',
-              'hd': '1',
-            },
+            body: bodyMap,
           ).timeout(const Duration(seconds: 12));
 
           if (postRes.statusCode == 200) {
             final decoded = jsonDecode(utf8.decode(postRes.bodyBytes));
-            if (decoded is Map &&
-                decoded['data'] is Map &&
-                (decoded['data'] as Map)['videos'] is List) {
-              final List<dynamic> vids =
-                  (decoded['data'] as Map)['videos'] as List<dynamic>;
-              for (final v in vids.take(maxVideosToImport)) {
-                if (v is Map) {
-                  final String rawCaption =
-                      stripPlatformMentions((v['title'] ?? '').toString());
-                  final String hdUrl = _normalizeAbsoluteTikwmUrl(
-                      (v['hdplay'] ?? v['play'] ?? v['wmplay'])?.toString());
-                  final String videoIdStr = (v['video_id'] ?? '').toString();
-                  if (hdUrl.startsWith('http')) {
-                    final sourceMeta = ImportedVideoSourceMetadata(
-                      title: rawCaption.split('\n').first.trim(),
-                      originalDescription: rawCaption,
-                      hdStreamUrl: hdUrl,
-                      sourceRawUrl: videoIdStr.isNotEmpty
-                          ? 'https://www.tiktok.com/@$candidate/video/$videoIdStr'
-                          : trimmed,
-                      qualityBadge: '1080p Full HD',
-                      isVerticalSource: true,
-                      resolvedRealStream: true,
-                    );
-                    final meta = classifyAndGeneratePedagogicalMetadata(
-                      rawUrl: trimmed,
-                      sourceMeta: sourceMeta,
-                    );
-                    importedList.add(
-                      VideoModel(
-                        id: 'v_ch_${DateTime.now().millisecondsSinceEpoch}_${importedList.length}',
-                        title: meta['title'] as String,
-                        description: meta['description'] as String,
-                        category: meta['category'] as String,
-                        ageGroup: meta['ageGroup'] as String,
-                        repeatPhrase: meta['repeatPhrase'] as String,
-                        activeActivity: meta['activeActivity'] as String,
-                        streamUrl: hdUrl,
-                        originalSourceUrl: sourceMeta.sourceRawUrl,
-                        bgGradientStart: meta['bgGradientStart'] as Color,
-                        bgGradientEnd: const Color(0xFF0F172A),
-                        emoji: meta['emoji'] as String,
-                        autoFitMode: 'auto_cover',
-                        qualityBadge: '1080p Full HD',
-                        likes: 160 + importedList.length * 12,
-                      ),
-                    );
-                  }
-                }
-              }
+            final extracted = _extractTikwmVideoListFromResponse(decoded);
+            for (int i = 0;
+                i < extracted.take(maxVideosToImport).length;
+                i++) {
+              final item = extracted[i];
+              final String vidId = item['videoId'] ?? '';
+              importedList.add(
+                _buildDeferredChannelVideoItem(
+                  watchUrl: vidId.isNotEmpty
+                      ? 'https://www.tiktok.com/@$cleanUser/video/$vidId'
+                      : trimmed,
+                  rawTitle: item['title'] ?? '',
+                  rawDescription: item['description'] ?? '',
+                  isVertical: true,
+                  indexOffset: i,
+                  directStreamUrl: item['streamUrl'],
+                  badge: item['badge'] ?? '1080p Full HD',
+                ),
+              );
             }
           }
         } catch (_) {}
 
         if (importedList.isNotEmpty) return importedList;
-
-        try {
-          final getUri = Uri.parse(
-              'https://www.tikwm.com/api/user/posts?unique_id=${Uri.encodeComponent(candidate)}&count=12&cursor=0&hd=1');
-          final getRes = await http.get(
-            getUri,
-            headers: {
-              'User-Agent':
-                  'Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/124.0.0.0 Mobile Safari/537.36',
-            },
-          ).timeout(const Duration(seconds: 10));
-
-          if (getRes.statusCode == 200) {
-            final decoded = jsonDecode(utf8.decode(getRes.bodyBytes));
-            if (decoded is Map &&
-                decoded['data'] is Map &&
-                (decoded['data'] as Map)['videos'] is List) {
-              final List<dynamic> vids =
-                  (decoded['data'] as Map)['videos'] as List<dynamic>;
-              for (final v in vids.take(maxVideosToImport)) {
-                if (v is Map) {
-                  final String rawCaption =
-                      stripPlatformMentions((v['title'] ?? '').toString());
-                  final String hdUrl = _normalizeAbsoluteTikwmUrl(
-                      (v['hdplay'] ?? v['play'] ?? v['wmplay'])?.toString());
-                  final String videoIdStr = (v['video_id'] ?? '').toString();
-                  if (hdUrl.startsWith('http')) {
-                    final sourceMeta = ImportedVideoSourceMetadata(
-                      title: rawCaption.split('\n').first.trim(),
-                      originalDescription: rawCaption,
-                      hdStreamUrl: hdUrl,
-                      sourceRawUrl: videoIdStr.isNotEmpty
-                          ? 'https://www.tiktok.com/@$candidate/video/$videoIdStr'
-                          : trimmed,
-                      qualityBadge: '1080p Full HD',
-                      isVerticalSource: true,
-                      resolvedRealStream: true,
-                    );
-                    final meta = classifyAndGeneratePedagogicalMetadata(
-                      rawUrl: trimmed,
-                      sourceMeta: sourceMeta,
-                    );
-                    importedList.add(
-                      VideoModel(
-                        id: 'v_ch_${DateTime.now().millisecondsSinceEpoch}_${importedList.length}',
-                        title: meta['title'] as String,
-                        description: meta['description'] as String,
-                        category: meta['category'] as String,
-                        ageGroup: meta['ageGroup'] as String,
-                        repeatPhrase: meta['repeatPhrase'] as String,
-                        activeActivity: meta['activeActivity'] as String,
-                        streamUrl: hdUrl,
-                        originalSourceUrl: sourceMeta.sourceRawUrl,
-                        bgGradientStart: meta['bgGradientStart'] as Color,
-                        bgGradientEnd: const Color(0xFF0F172A),
-                        emoji: meta['emoji'] as String,
-                        autoFitMode: 'auto_cover',
-                        qualityBadge: '1080p Full HD',
-                        likes: 160 + importedList.length * 12,
-                      ),
-                    );
-                  }
-                }
-              }
-            }
-          }
-        } catch (_) {}
-
-        if (importedList.isNotEmpty) return importedList;
+        await Future.delayed(const Duration(milliseconds: 1150));
       }
 
       try {
@@ -1242,70 +1370,43 @@ class SmartVideoLinkAutoImporter {
                 'Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/124.0.0.0 Mobile Safari/537.36',
           },
           body: {
-            'keywords': ttUsername,
-            'count': '$maxVideosToImport',
+            'keywords': cleanUser,
+            'count': '12',
             'cursor': '0',
             'hd': '1',
           },
-        ).timeout(const Duration(seconds: 10));
+        ).timeout(const Duration(seconds: 11));
 
         if (searchRes.statusCode == 200) {
           final decoded = jsonDecode(utf8.decode(searchRes.bodyBytes));
-          if (decoded is Map &&
-              decoded['data'] is Map &&
-              (decoded['data'] as Map)['videos'] is List) {
-            final List<dynamic> vids =
-                (decoded['data'] as Map)['videos'] as List<dynamic>;
-            for (final v in vids.take(maxVideosToImport)) {
-              if (v is Map) {
-                final String rawCaption =
-                    stripPlatformMentions((v['title'] ?? '').toString());
-                final String hdUrl = _normalizeAbsoluteTikwmUrl(
-                    (v['hdplay'] ?? v['play'] ?? v['wmplay'])?.toString());
-                final String videoIdStr = (v['video_id'] ?? '').toString();
-                if (hdUrl.startsWith('http')) {
-                  final sourceMeta = ImportedVideoSourceMetadata(
-                    title: rawCaption.split('\n').first.trim(),
-                    originalDescription: rawCaption,
-                    hdStreamUrl: hdUrl,
-                    sourceRawUrl: videoIdStr.isNotEmpty
-                        ? 'https://www.tiktok.com/@$ttUsername/video/$videoIdStr'
-                        : trimmed,
-                    qualityBadge: '1080p Full HD',
-                    isVerticalSource: true,
-                    resolvedRealStream: true,
-                  );
-                  final meta = classifyAndGeneratePedagogicalMetadata(
-                    rawUrl: trimmed,
-                    sourceMeta: sourceMeta,
-                  );
-                  importedList.add(
-                    VideoModel(
-                      id: 'v_ch_${DateTime.now().millisecondsSinceEpoch}_${importedList.length}',
-                      title: meta['title'] as String,
-                      description: meta['description'] as String,
-                      category: meta['category'] as String,
-                      ageGroup: meta['ageGroup'] as String,
-                      repeatPhrase: meta['repeatPhrase'] as String,
-                      activeActivity: meta['activeActivity'] as String,
-                      streamUrl: hdUrl,
-                      originalSourceUrl: sourceMeta.sourceRawUrl,
-                      bgGradientStart: meta['bgGradientStart'] as Color,
-                      bgGradientEnd: const Color(0xFF0F172A),
-                      emoji: meta['emoji'] as String,
-                      autoFitMode: 'auto_cover',
-                      qualityBadge: '1080p Full HD',
-                      likes: 160 + importedList.length * 12,
-                    ),
-                  );
-                }
-              }
-            }
+          final extracted = _extractTikwmVideoListFromResponse(decoded);
+          for (int i = 0; i < extracted.take(maxVideosToImport).length; i++) {
+            final item = extracted[i];
+            final String vidId = item['videoId'] ?? '';
+            importedList.add(
+              _buildDeferredChannelVideoItem(
+                watchUrl: vidId.isNotEmpty
+                    ? 'https://www.tiktok.com/@$cleanUser/video/$vidId'
+                    : trimmed,
+                rawTitle: item['title'] ?? '',
+                rawDescription: item['description'] ?? '',
+                isVertical: true,
+                indexOffset: i,
+                directStreamUrl: item['streamUrl'],
+                badge: item['badge'] ?? '1080p Full HD',
+              ),
+            );
           }
         }
       } catch (_) {}
 
       if (importedList.isNotEmpty) return importedList;
+
+      final scraped = await _scrapeTikTokProfilePageDirectly(
+        cleanUser,
+        maxVideosToImport: maxVideosToImport,
+      );
+      if (scraped.isNotEmpty) return scraped;
     }
 
     if (isYouTubeUrl(trimmed)) {
@@ -1485,6 +1586,7 @@ class VideoModel {
   final String repeatPhrase;
   final String activeActivity;
   String streamUrl;
+  String audioStreamUrl;
   final String originalSourceUrl;
   final Color bgGradientStart;
   final Color bgGradientEnd;
@@ -1503,6 +1605,7 @@ class VideoModel {
     required this.repeatPhrase,
     required this.activeActivity,
     required this.streamUrl,
+    this.audioStreamUrl = '',
     this.originalSourceUrl = '',
     this.bgGradientStart = const Color(0xFF1E1B4B),
     this.bgGradientEnd = const Color(0xFF0F172A),
@@ -1562,6 +1665,7 @@ class VideoModel {
               'شارك ما تعلمته اليوم مع ماما أو بابا!')
           .toString(),
       streamUrl: (json['streamUrl'] ?? json['hlsStreamUrl'] ?? '').toString(),
+      audioStreamUrl: (json['audioStreamUrl'] ?? '').toString(),
       originalSourceUrl: (json['originalSourceUrl'] ?? '').toString(),
       bgGradientStart: _parseHexColor(
           json['bgGradientStart']?.toString(), const Color(0xFF1E1B4B)),
@@ -1585,6 +1689,7 @@ class VideoModel {
       'repeatPhrase': repeatPhrase,
       'activeActivity': activeActivity,
       'streamUrl': streamUrl,
+      'audioStreamUrl': audioStreamUrl,
       'originalSourceUrl': originalSourceUrl,
       'playlistId': category,
       'categoryLabel': getCategoryDisplayLabel(category),
@@ -6780,6 +6885,7 @@ class VerticalVideoFeedItemWidget extends StatefulWidget {
 class _VerticalVideoFeedItemWidgetState
     extends State<VerticalVideoFeedItemWidget> {
   VideoPlayerController? _videoController;
+  VideoPlayerController? _audioController;
   bool _isInitialized = false;
   bool _hasError = false;
   bool _isMuted = false;
@@ -6802,8 +6908,10 @@ class _VerticalVideoFeedItemWidgetState
     } else if (oldWidget.isActive != widget.isActive && _isInitialized) {
       if (widget.isActive) {
         _videoController?.play();
+        _audioController?.play();
       } else {
         _videoController?.pause();
+        _audioController?.pause();
       }
     }
   }
@@ -6829,6 +6937,8 @@ class _VerticalVideoFeedItemWidgetState
 
     String url = normalizeStreamOrLocalUrl(raw);
 
+    String separateAudioUrl = widget.video.audioStreamUrl.trim();
+
     if ((SmartVideoLinkAutoImporter.isYouTubeUrl(url) &&
             !url.contains('googlevideo.com')) ||
         (SmartVideoLinkAutoImporter.isTikTokUrl(url) &&
@@ -6839,6 +6949,10 @@ class _VerticalVideoFeedItemWidgetState
           resolvedMeta.hdStreamUrl!.isNotEmpty) {
         url = resolvedMeta.hdStreamUrl!;
         widget.video.streamUrl = url;
+        if (resolvedMeta.separateAudioStreamUrl != null) {
+          separateAudioUrl = resolvedMeta.separateAudioStreamUrl!;
+          widget.video.audioStreamUrl = separateAudioUrl;
+        }
       }
     }
 
@@ -6854,6 +6968,7 @@ class _VerticalVideoFeedItemWidgetState
         ctrl = VideoPlayerController.networkUrl(
           Uri.parse(url),
           formatHint: formatHint,
+          videoPlayerOptions: VideoPlayerOptions(mixWithOthers: true),
           httpHeaders: const {
             'User-Agent':
                 'Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36',
@@ -6864,8 +6979,28 @@ class _VerticalVideoFeedItemWidgetState
       _videoController = ctrl;
       await ctrl.initialize();
       await ctrl.setLooping(true);
+
+      if (separateAudioUrl.isNotEmpty && separateAudioUrl.startsWith('http')) {
+        try {
+          final audioCtrl = VideoPlayerController.networkUrl(
+            Uri.parse(separateAudioUrl),
+            videoPlayerOptions: VideoPlayerOptions(mixWithOthers: true),
+            httpHeaders: const {
+              'User-Agent':
+                  'Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/124.0.0.0 Mobile Safari/537.36',
+            },
+          );
+          _audioController = audioCtrl;
+          await audioCtrl.initialize();
+          await audioCtrl.setLooping(true);
+        } catch (_) {
+          _audioController = null;
+        }
+      }
+
       if (widget.isActive) {
         await ctrl.play();
+        await _audioController?.play();
       }
       if (mounted) {
         setState(() {
@@ -6883,8 +7018,11 @@ class _VerticalVideoFeedItemWidgetState
               refreshed.hdStreamUrl!.isNotEmpty &&
               refreshed.hdStreamUrl != url) {
             widget.video.streamUrl = refreshed.hdStreamUrl!;
+            widget.video.audioStreamUrl =
+                refreshed.separateAudioStreamUrl ?? '';
             final retryCtrl = VideoPlayerController.networkUrl(
               Uri.parse(refreshed.hdStreamUrl!),
+              videoPlayerOptions: VideoPlayerOptions(mixWithOthers: true),
               httpHeaders: const {
                 'User-Agent':
                     'Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/124.0.0.0 Mobile Safari/537.36',
@@ -6978,6 +7116,8 @@ class _VerticalVideoFeedItemWidgetState
   void _disposeController() {
     _videoController?.dispose();
     _videoController = null;
+    _audioController?.dispose();
+    _audioController = null;
     _isInitialized = false;
   }
 
@@ -6993,7 +7133,12 @@ class _VerticalVideoFeedItemWidgetState
     setState(() {
       if (ctrl.value.isPlaying) {
         ctrl.pause();
+        _audioController?.pause();
       } else {
+        if (_audioController != null) {
+          _audioController!.seekTo(ctrl.value.position);
+          _audioController!.play();
+        }
         ctrl.play();
       }
     });
@@ -7005,6 +7150,7 @@ class _VerticalVideoFeedItemWidgetState
     setState(() {
       _isMuted = !_isMuted;
       ctrl.setVolume(_isMuted ? 0.0 : 1.0);
+      _audioController?.setVolume(_isMuted ? 0.0 : 1.0);
     });
   }
 
