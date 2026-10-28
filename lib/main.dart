@@ -236,7 +236,40 @@ class PronunciationEvaluation {
   });
 }
 
+class ImportedVideoSourceMetadata {
+  final String? title;
+  final String? originalDescription;
+  final String? authorName;
+  final String? hdStreamUrl;
+  final String qualityBadge;
+  final bool isVerticalSource;
+
+  const ImportedVideoSourceMetadata({
+    this.title,
+    this.originalDescription,
+    this.authorName,
+    this.hdStreamUrl,
+    this.qualityBadge = '1080p Full HD',
+    this.isVerticalSource = true,
+  });
+}
+
 class SmartVideoLinkAutoImporter {
+  static String stripPlatformMentions(String input) {
+    final RegExp forbiddenPlatforms = RegExp(
+      r'(youtube\s*shorts|youtube|youtu\.be|tiktok|tik\s*tok|انستقرام|انستغرام|فيسبوك|تيك\s*توك|تيكتوك|التيك\s*توك|التيكتوك|يوتيوب|اليوتيوب|شورتس|shorts|reels)',
+      caseSensitive: false,
+    );
+    String cleaned = input.replaceAll(forbiddenPlatforms, '');
+    cleaned = cleaned
+        .replaceAll(RegExp(r'\(\s*\)'), '')
+        .replaceAll(RegExp(r'\[\s*\]'), '')
+        .replaceAll(RegExp(r'-\s*-'), '-')
+        .replaceAll(RegExp(r'\s{2,}'), ' ')
+        .trim();
+    return cleaned;
+  }
+
   static String? extractYouTubeVideoId(String url) {
     final RegExp regExp = RegExp(
       r'(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?|shorts)\/|.*[?&]v=)|youtu\.be\/)([^"&?\/\s]{11})',
@@ -249,6 +282,48 @@ class SmartVideoLinkAutoImporter {
     return null;
   }
 
+  static String? extractYouTubePlaylistId(String url) {
+    final RegExp listRegex =
+        RegExp(r'[?&]list=([a-zA-Z0-9_-]+)', caseSensitive: false);
+    final match = listRegex.firstMatch(url.trim());
+    if (match != null && match.groupCount >= 1) {
+      return match.group(1);
+    }
+    return null;
+  }
+
+  static bool isYouTubeChannelOrPlaylistUrl(String url) {
+    final lower = url.toLowerCase().trim();
+    if (!isYouTubeUrl(lower)) return false;
+    if (lower.contains('list=')) return true;
+    if (lower.contains('/@') ||
+        lower.contains('/channel/') ||
+        lower.contains('/c/') ||
+        lower.contains('/user/') ||
+        lower.contains('/playlist')) {
+      return true;
+    }
+    return false;
+  }
+
+  static String? extractTikTokUsernameFromProfile(String url) {
+    final String trimmed = url.trim();
+    if (!isTikTokUrl(trimmed)) return null;
+    if (trimmed.toLowerCase().contains('/video/')) return null;
+    final RegExp profileRegex =
+        RegExp(r'tiktok\.com\/@([a-zA-Z0-9_.-]+)', caseSensitive: false);
+    final match = profileRegex.firstMatch(trimmed);
+    if (match != null && match.groupCount >= 1) {
+      return match.group(1);
+    }
+    return null;
+  }
+
+  static bool isChannelOrPlaylistUrl(String url) {
+    return isYouTubeChannelOrPlaylistUrl(url) ||
+        extractTikTokUsernameFromProfile(url) != null;
+  }
+
   static bool isYouTubeUrl(String url) {
     final lower = url.toLowerCase();
     return lower.contains('youtube.com') || lower.contains('youtu.be');
@@ -259,40 +334,42 @@ class SmartVideoLinkAutoImporter {
     return lower.contains('tiktok.com');
   }
 
-  static Future<String?> _fetchOEmbedTitle(String rawUrl) async {
-    try {
-      String? oembedEndpoint;
-      if (isYouTubeUrl(rawUrl)) {
-        oembedEndpoint =
-            'https://www.youtube.com/oembed?url=${Uri.encodeComponent(rawUrl)}&format=json';
-      } else if (isTikTokUrl(rawUrl)) {
-        oembedEndpoint =
-            'https://www.tiktok.com/oembed?url=${Uri.encodeComponent(rawUrl)}';
-      }
-      if (oembedEndpoint == null) return null;
-
-      final response = await http
-          .get(Uri.parse(oembedEndpoint))
-          .timeout(const Duration(seconds: 6));
-      if (response.statusCode == 200) {
-        final data = jsonDecode(utf8.decode(response.bodyBytes));
-        if (data is Map && data['title'] != null) {
-          final String title = data['title'].toString().trim();
-          if (title.isNotEmpty) return title;
-        }
-      }
-    } catch (_) {}
-    return null;
+  static String _decodeHtmlEntities(String text) {
+    return text
+        .replaceAll('&quot;', '"')
+        .replaceAll('&amp;', '&')
+        .replaceAll('&#39;', "'")
+        .replaceAll('&apos;', "'")
+        .replaceAll('&lt;', '<')
+        .replaceAll('&gt;', '>')
+        .replaceAll(r'\n', '\n')
+        .replaceAll(r'\"', '"')
+        .trim();
   }
 
-  static Future<String?> resolvePlayableStreamFromSocialUrl(
+  static int _parseResolutionRank(String? q) {
+    if (q == null) return 0;
+    final match = RegExp(r'(\d{3,4})').firstMatch(q);
+    if (match != null) {
+      return int.tryParse(match.group(1)!) ?? 0;
+    }
+    return 0;
+  }
+
+  static Future<ImportedVideoSourceMetadata> fetchHighDefStreamAndExactMetadata(
       String rawUrl) async {
     final String trimmed = rawUrl.trim();
-    if (trimmed.startsWith('/') ||
-        trimmed.startsWith('file://') ||
-        trimmed.toLowerCase().contains('.mp4') ||
-        trimmed.toLowerCase().contains('.m3u8')) {
-      return trimmed;
+
+    if (trimmed.startsWith('/') || trimmed.startsWith('file://')) {
+      final String fileName = trimmed.split('/').last.replaceAll('.mp4', '');
+      return ImportedVideoSourceMetadata(
+        title: fileName.isNotEmpty ? fileName : 'فيديو محلي عالي الدقة',
+        originalDescription:
+            'فيديو محلي بأعلى جودة أصلية من ذاكرة الجهاز ($fileName).',
+        hdStreamUrl: trimmed,
+        qualityBadge: 'Original 1080p HD',
+        isVerticalSource: true,
+      );
     }
 
     if (trimmed.contains('drive.google.com/file/d/')) {
@@ -300,83 +377,343 @@ class SmartVideoLinkAutoImporter {
           RegExp(r'drive\.google\.com\/file\/d\/([a-zA-Z0-9_-]+)');
       final match = driveRegex.firstMatch(trimmed);
       if (match != null && match.groupCount >= 1) {
-        return 'https://drive.google.com/uc?export=download&id=${match.group(1)!}';
+        final String fileId = match.group(1)!;
+        return ImportedVideoSourceMetadata(
+          title: 'فيديو سحابي عالي الجودة',
+          originalDescription: 'بث مرئي مباشر بالجودة الأصلية الكاملة.',
+          hdStreamUrl: 'https://drive.google.com/uc?export=download&id=$fileId',
+          qualityBadge: 'Original HD',
+          isVerticalSource: true,
+        );
       }
     }
 
     if (isTikTokUrl(trimmed)) {
+      String? ttTitle;
+      String? ttDesc;
+      String? ttAuthor;
+      String? bestHdUrl;
+      String badge = '1080p HD';
+
       try {
         final apiUri = Uri.parse(
-            'https://www.tikwm.com/api/?url=${Uri.encodeComponent(trimmed)}');
+            'https://www.tikwm.com/api/?url=${Uri.encodeComponent(trimmed)}&hd=1');
         final res =
-            await http.get(apiUri).timeout(const Duration(seconds: 8));
+            await http.get(apiUri).timeout(const Duration(seconds: 9));
         if (res.statusCode == 200) {
           final decoded = jsonDecode(utf8.decode(res.bodyBytes));
           if (decoded is Map && decoded['data'] is Map) {
             final dataMap = decoded['data'] as Map;
-            final String? playUrl =
-                (dataMap['play'] ?? dataMap['wmplay'])?.toString();
-            if (playUrl != null &&
-                playUrl.isNotEmpty &&
-                playUrl.startsWith('http')) {
-              return playUrl;
+            final String? rawCaption = dataMap['title']?.toString().trim();
+            if (rawCaption != null && rawCaption.isNotEmpty) {
+              ttDesc = rawCaption;
+              ttTitle = rawCaption.split('\n').first.trim();
+            }
+            if (dataMap['author'] is Map) {
+              ttAuthor = (dataMap['author'] as Map)['nickname']?.toString();
+            }
+            final String? hdPlay = dataMap['hdplay']?.toString();
+            final String? play = dataMap['play']?.toString();
+            final String? wmPlay = dataMap['wmplay']?.toString();
+
+            if (hdPlay != null &&
+                hdPlay.isNotEmpty &&
+                hdPlay.startsWith('http')) {
+              bestHdUrl = hdPlay;
+              badge = '1080p Full HD';
+            } else if (play != null &&
+                play.isNotEmpty &&
+                play.startsWith('http')) {
+              bestHdUrl = play;
+              badge = '720p HD';
+            } else if (wmPlay != null &&
+                wmPlay.isNotEmpty &&
+                wmPlay.startsWith('http')) {
+              bestHdUrl = wmPlay;
+              badge = 'HD';
             }
           }
         }
       } catch (_) {}
+
+      if (ttTitle == null || ttDesc == null) {
+        try {
+          final oembedRes = await http
+              .get(Uri.parse(
+                  'https://www.tiktok.com/oembed?url=${Uri.encodeComponent(trimmed)}'))
+              .timeout(const Duration(seconds: 6));
+          if (oembedRes.statusCode == 200) {
+            final data = jsonDecode(utf8.decode(oembedRes.bodyBytes));
+            if (data is Map) {
+              final String? oTitle = data['title']?.toString().trim();
+              ttAuthor ??= data['author_name']?.toString().trim();
+              if (oTitle != null && oTitle.isNotEmpty) {
+                ttDesc ??= oTitle;
+                ttTitle ??= oTitle.split('\n').first.trim();
+              }
+            }
+          }
+        } catch (_) {}
+      }
+
+      return ImportedVideoSourceMetadata(
+        title: ttTitle,
+        originalDescription: ttDesc,
+        authorName: ttAuthor,
+        hdStreamUrl: bestHdUrl,
+        qualityBadge: badge,
+        isVerticalSource: true,
+      );
     }
 
     if (isYouTubeUrl(trimmed)) {
       final String? ytId = extractYouTubeVideoId(trimmed);
+      String? ytTitle;
+      String? ytDesc;
+      String? ytAuthor;
+      String? bestStreamUrl;
+      String badge = '1080p Full HD';
+      final bool isShorts = trimmed.toLowerCase().contains('/shorts/');
+
       if (ytId != null) {
-        final List<String> pipedInstances = [
+        final List<String> pipedApis = [
           'https://pipedapi.kavin.rocks/streams/$ytId',
           'https://pipedapi.tokhmi.xyz/streams/$ytId',
+          'https://pipedapi.moomoo.me/streams/$ytId',
         ];
-        for (final api in pipedInstances) {
+
+        for (final api in pipedApis) {
           try {
             final res = await http
                 .get(Uri.parse(api))
-                .timeout(const Duration(seconds: 6));
+                .timeout(const Duration(seconds: 7));
             if (res.statusCode == 200) {
               final decoded = jsonDecode(utf8.decode(res.bodyBytes));
               if (decoded is Map) {
-                if (decoded['hls'] != null &&
-                    decoded['hls'].toString().startsWith('http')) {
-                  return decoded['hls'].toString();
-                }
+                ytTitle ??= decoded['title']?.toString().trim();
+                ytDesc ??= decoded['description']?.toString().trim();
+                ytAuthor ??= decoded['uploader']?.toString().trim();
+
+                int bestHeight = 0;
+                String? bestProgressiveMp4;
                 if (decoded['videoStreams'] is List) {
                   for (final s in (decoded['videoStreams'] as List)) {
                     if (s is Map &&
                         s['videoOnly'] == false &&
-                        s['url'] != null) {
-                      return s['url'].toString();
+                        s['url'] != null &&
+                        s['url'].toString().startsWith('http')) {
+                      final int h =
+                          int.tryParse(s['height']?.toString() ?? '') ??
+                              _parseResolutionRank(s['quality']?.toString());
+                      if (h >= bestHeight) {
+                        bestHeight = h;
+                        bestProgressiveMp4 = s['url'].toString();
+                      }
                     }
                   }
                 }
+
+                final String? hlsMaster = decoded['hls']?.toString();
+                if (bestHeight >= 720 && bestProgressiveMp4 != null) {
+                  bestStreamUrl = bestProgressiveMp4;
+                  badge = '${bestHeight}p HD';
+                } else if (hlsMaster != null && hlsMaster.startsWith('http')) {
+                  bestStreamUrl = hlsMaster;
+                  badge = '1080p Adaptive HLS';
+                } else if (bestProgressiveMp4 != null) {
+                  bestStreamUrl = bestProgressiveMp4;
+                  badge = bestHeight > 0 ? '${bestHeight}p HD' : 'HD MP4';
+                }
+
+                if (bestStreamUrl != null && ytDesc != null) break;
               }
             }
           } catch (_) {}
         }
+
+        if (ytDesc == null || ytTitle == null || bestStreamUrl == null) {
+          final List<String> invidiousApis = [
+            'https://inv.tux.pizza/api/v1/videos/$ytId',
+            'https://invidious.nerdvpn.de/api/v1/videos/$ytId',
+            'https://invidious.privacyredirect.com/api/v1/videos/$ytId',
+          ];
+          for (final invApi in invidiousApis) {
+            try {
+              final res = await http
+                  .get(Uri.parse(invApi))
+                  .timeout(const Duration(seconds: 7));
+              if (res.statusCode == 200) {
+                final decoded = jsonDecode(utf8.decode(res.bodyBytes));
+                if (decoded is Map) {
+                  ytTitle ??= decoded['title']?.toString().trim();
+                  ytDesc ??= decoded['description']?.toString().trim();
+                  ytAuthor ??= decoded['author']?.toString().trim();
+
+                  if (bestStreamUrl == null &&
+                      decoded['formatStreams'] is List) {
+                    int bestH = 0;
+                    for (final fs in (decoded['formatStreams'] as List)) {
+                      if (fs is Map && fs['url'] != null) {
+                        final int h = _parseResolutionRank(
+                            fs['qualityLabel']?.toString() ??
+                                fs['resolution']?.toString());
+                        if (h >= bestH) {
+                          bestH = h;
+                          bestStreamUrl = fs['url'].toString();
+                          badge = bestH > 0 ? '${bestH}p HD' : '720p HD';
+                        }
+                      }
+                    }
+                  }
+                  if (ytDesc != null && bestStreamUrl != null) break;
+                }
+              }
+            } catch (_) {}
+          }
+        }
+      }
+
+      if (ytTitle == null || ytDesc == null) {
+        try {
+          final pageRes = await http.get(
+            Uri.parse(trimmed),
+            headers: {'Accept-Language': 'ar,en;q=0.9'},
+          ).timeout(const Duration(seconds: 7));
+          if (pageRes.statusCode == 200) {
+            final html = utf8.decode(pageRes.bodyBytes, allowMalformed: true);
+            if (ytTitle == null) {
+              final titleMatch = RegExp(
+                      r'<meta\s+property="og:title"\s+content="([^"]+)"',
+                      caseSensitive: false)
+                  .firstMatch(html);
+              if (titleMatch != null) {
+                ytTitle = _decodeHtmlEntities(titleMatch.group(1)!);
+              }
+            }
+            if (ytDesc == null) {
+              final shortDescMatch =
+                  RegExp(r'"shortDescription":"((?:\\.|[^"\\])*)"')
+                      .firstMatch(html);
+              if (shortDescMatch != null &&
+                  shortDescMatch.group(1)!.trim().isNotEmpty) {
+                ytDesc = _decodeHtmlEntities(shortDescMatch.group(1)!);
+              } else {
+                final ogDescMatch = RegExp(
+                        r'<meta\s+property="og:description"\s+content="([^"]+)"',
+                        caseSensitive: false)
+                    .firstMatch(html);
+                if (ogDescMatch != null) {
+                  ytDesc = _decodeHtmlEntities(ogDescMatch.group(1)!);
+                }
+              }
+            }
+          }
+        } catch (_) {}
+      }
+
+      if (ytTitle == null) {
+        try {
+          final oembedRes = await http
+              .get(Uri.parse(
+                  'https://www.youtube.com/oembed?url=${Uri.encodeComponent(trimmed)}&format=json'))
+              .timeout(const Duration(seconds: 6));
+          if (oembedRes.statusCode == 200) {
+            final data = jsonDecode(utf8.decode(oembedRes.bodyBytes));
+            if (data is Map) {
+              ytTitle ??= data['title']?.toString().trim();
+              ytAuthor ??= data['author_name']?.toString().trim();
+            }
+          }
+        } catch (_) {}
+      }
+
+      return ImportedVideoSourceMetadata(
+        title: ytTitle,
+        originalDescription: ytDesc,
+        authorName: ytAuthor,
+        hdStreamUrl: bestStreamUrl,
+        qualityBadge: badge,
+        isVerticalSource: isShorts,
+      );
+    }
+
+    return ImportedVideoSourceMetadata(
+      title: null,
+      originalDescription: null,
+      hdStreamUrl: trimmed,
+      qualityBadge: '1080p HD',
+      isVerticalSource: true,
+    );
+  }
+
+  static String _cleanOriginalDescription(String? rawDesc, String fallbackTitle) {
+    final String safeFallback = stripPlatformMentions(fallbackTitle);
+    if (rawDesc == null || rawDesc.trim().isEmpty) {
+      return safeFallback.isNotEmpty
+          ? safeFallback
+          : 'قصة مرئية هادئة وممتعة لأطفالنا الأبطال.';
+    }
+    String cleaned = rawDesc
+        .replaceAll(RegExp(r'<[^>]*>'), ' ')
+        .replaceAll(RegExp(r'https?:\/\/\S+'), '')
+        .replaceAll(RegExp(r'#\S+'), '')
+        .replaceAll(RegExp(r'\s{3,}'), '\n')
+        .trim();
+    cleaned = stripPlatformMentions(cleaned);
+    return cleaned.isEmpty
+        ? (safeFallback.isNotEmpty
+            ? safeFallback
+            : 'قصة مرئية هادئة وممتعة لأطفالنا الأبطال.')
+        : cleaned;
+  }
+
+  static String _extractSmartRepeatPhraseFromContent(
+      String title, String description, String category) {
+    final String safeText = stripPlatformMentions('$title $description');
+    final RegExp quotedMatch = RegExp(r'«([^»]{6,60})»|"([^"]{6,60})"');
+    final m = quotedMatch.firstMatch(safeText);
+    if (m != null) {
+      final String extracted =
+          stripPlatformMentions(m.group(1) ?? m.group(2) ?? '');
+      if (extracted.isNotEmpty) {
+        return '«$extracted»';
       }
     }
 
-    return null;
+    final String cleanTitle =
+        stripPlatformMentions(title).replaceAll(RegExp(r'[#@|•\-_~]'), ' ').trim();
+    final List<String> titleWords =
+        cleanTitle.split(RegExp(r'\s+')).where((w) => w.length >= 2).toList();
+    if (titleWords.length >= 2 && titleWords.length <= 8) {
+      return '«${titleWords.join(" ")}»';
+    }
+
+    switch (category) {
+      case 'bedtime':
+        return '«بِاسْمِكَ اللَّهُمَّ أَمُوتُ وَأَحْيَا، تُصْبِحُونَ عَلَى خَيْرٍ»';
+      case 'arabic':
+        return '«لُغَتِي العَرَبِيَّةُ جَمِيلَةٌ، وَأَنَا أَتَحَدَّثُ بِفَصَاحَةٍ»';
+      case 'science':
+        return '«سُبْحَانَ اللَّهِ الخَالِقِ العَظِيمِ، مَا أَجْمَلَ الطَّبِيعَةَ!»';
+      case 'crafts':
+        return '«أَنَا طِفْلٌ مُبْدِعٌ، أَصْنَعُ وَأَرْسُمُ بِيَدِي الجَمِيلَةِ»';
+      default:
+        return '«أَنَا بَطَلٌ مُؤَدَّبٌ، أُحِبُّ الخَيْرَ وَأُسَاعِدُ الجَمِيعَ»';
+    }
   }
 
   static Map<String, dynamic> classifyAndGeneratePedagogicalMetadata({
     required String rawUrl,
-    String? fetchedTitle,
+    required ImportedVideoSourceMetadata sourceMeta,
   }) {
-    final String combined =
-        '${fetchedTitle ?? ""} ${Uri.decodeFull(rawUrl)}'.toLowerCase();
+    final String rawTitle = stripPlatformMentions(sourceMeta.title?.trim() ?? '');
+    final String rawDesc =
+        stripPlatformMentions(sourceMeta.originalDescription?.trim() ?? '');
+    final String combined = '$rawTitle $rawDesc'.toLowerCase();
 
     String category = 'habits';
     String ageGroup = '3–6 سنوات';
     String emoji = '🌟';
-    String generatedTitle = fetchedTitle?.trim() ?? '';
-    String description = '';
-    String repeatPhrase = '';
     String activeActivity = '';
     Color gradStart = const Color(0xFF1E1B4B);
 
@@ -392,12 +729,6 @@ class SmartVideoLinkAutoImporter {
       ageGroup = '3–6 سنوات';
       emoji = '🌙';
       gradStart = const Color(0xFF1E1B4B);
-      if (generatedTitle.isEmpty) {
-        generatedTitle = 'قصة المساء الهادئة قبل النوم';
-      }
-      description =
-          '«قصة مسائية هادئة مستوردة تلقائياً ومضبوطة الأبعاد لتهدئة الطفل ومساعدته على الاسترخاء قبل النوم.»';
-      repeatPhrase = '«بِاسْمِكَ اللَّهُمَّ أَمُوتُ وَأَحْيَا، تُصْبِحُونَ عَلَى خَيْرٍ»';
       activeActivity =
           'خذ ٣ أنفاس عميقة وهادئة مع ماما أو بابا، وابتسم قبل إغماض عينيك للنوم الجميل.';
     } else if (combined.contains('حروف') ||
@@ -414,14 +745,8 @@ class SmartVideoLinkAutoImporter {
       ageGroup = '2–6 سنوات';
       emoji = '🗣️';
       gradStart = const Color(0xFF312E81);
-      if (generatedTitle.isEmpty) {
-        generatedTitle = 'رحلة الفصاحة والنطق العربي الجميل';
-      }
-      description =
-          '«مقطع تعليمي ممتع لتنمية الحصيلة اللغوية ومخارج الحروف العربية الفصحى لدى الطفل بأسلوب شيق.»';
-      repeatPhrase = '«لُغَتِي العَرَبِيَّةُ جَمِيلَةٌ، وَأَنَا أَتَحَدَّثُ بِفَصَاحَةٍ»';
       activeActivity =
-          'انطق ٣ كلمات عربية فصيحة سمعتها في هذا المقطع بصوت واضح أمام ماما أو بابا لتحصل على نجمة البطل!';
+          'انطق ٣ كلمات عربية سمعتها في هذه القصة بصوت واضح أمام ماما أو بابا لتحصل على نجمة البطل!';
     } else if (combined.contains('حيوان') ||
         combined.contains('طبيع') ||
         combined.contains('بحر') ||
@@ -438,14 +763,8 @@ class SmartVideoLinkAutoImporter {
       ageGroup = '4–8 سنوات';
       emoji = '🦋';
       gradStart = const Color(0xFF064E3B);
-      if (generatedTitle.isEmpty) {
-        generatedTitle = 'عجائب الطبيعة والعلوم للأطفال';
-      }
-      description =
-          '«استكشاف بصري هادئ وممتع لعجائب المخلوقات والطبيعة يغذي فضول الطفل العلمي وينمي قوة الملاحظة.»';
-      repeatPhrase = '«سُبْحَانَ اللَّهِ الخَالِقِ العَظِيمِ، مَا أَجْمَلَ الطَّبِيعَةَ!»';
       activeActivity =
-          'احكِ لماما أو بابا معلومة جديدة رأيتها في هذا الفيديو، وقلّد حركة الكائن اللطيف الذي ظهر فيه!';
+          'احكِ لماما أو بابا معلومة جديدة رأيتها في هذه القصة، وقلّد حركة الكائن اللطيف الذي ظهر فيها!';
     } else if (combined.contains('رسم') ||
         combined.contains('تلوين') ||
         combined.contains('اصنع') ||
@@ -460,81 +779,79 @@ class SmartVideoLinkAutoImporter {
       ageGroup = '4–8 سنوات';
       emoji = '🎨';
       gradStart = const Color(0xFF78350F);
-      if (generatedTitle.isEmpty) {
-        generatedTitle = 'مرسم الإبداع والمهارات اليدوية للطفل';
-      }
-      description =
-          '«نشاط إبداعي يحفز المهارات الحركية الدقيقة والخيال الفني لدى الطفل ويشجعه على التطبيق العملي.»';
-      repeatPhrase = '«أَنَا طِفْلٌ مُبْدِعٌ، أَصْنَعُ وَأَرْسُمُ بِيَدِي الجَمِيلَةِ»';
       activeActivity =
-          'أحضر ورقة وألواناً أو مكعباتك الآن، وحاول رسم أو تقليد الشكل الجميل الذي شاهدته في الفيديو!';
+          'أحضر ورقة وألواناً أو مكعباتك الآن، وحاول رسم أو تقليد الشكل الجميل الذي شاهدته في القصة!';
     } else {
       category = 'habits';
       ageGroup = '3–6 سنوات';
       emoji = '🧸';
       gradStart = const Color(0xFF134E4A);
-      if (generatedTitle.isEmpty) {
-        if (isTikTokUrl(rawUrl)) {
-          generatedTitle = 'قصة قصيرة هادئة في الآداب والسلوك (TikTok)';
-        } else if (isYouTubeUrl(rawUrl)) {
-          generatedTitle = 'قصة مصورة تربوية للأبطال (YouTube)';
-        } else {
-          generatedTitle = 'قصة حنين التربوية الهادئة للأبطال';
-        }
-      }
-      description =
-          '«قصة تربوية هادئة تغرس الآداب الجميلة وحسن الخلق والتعاون الأسري لدى الطفل بطريقة محببة.»';
-      repeatPhrase = '«أَنَا بَطَلٌ مُؤَدَّبٌ، أُحِبُّ الخَيْرَ وَأُسَاعِدُ الجَمِيعَ»';
       activeActivity =
-          'ابتسم الآن في وجه ماما أو بابا، ورتب ٣ أشياء في غرفتك لتثبت أنك بطل الأخلاق والآداب!';
+          'شارك ماما أو بابا أجمل فكرة تعلمتها من هذه القصة، ورتب ٣ أشياء في غرفتك بنشاط!';
     }
 
-    generatedTitle = generatedTitle
+    String finalTitle = rawTitle
         .replaceAll(RegExp(r'#\S+'), '')
         .replaceAll('|', '—')
         .trim();
-    if (generatedTitle.length > 65) {
-      generatedTitle = '${generatedTitle.substring(0, 62)}...';
+    if (finalTitle.isEmpty) {
+      finalTitle = rawDesc.split('\n').first.trim();
     }
-    if (generatedTitle.isEmpty) {
-      generatedTitle = 'قصة تربوية هادئة من اختيار الوالدين';
+    finalTitle = stripPlatformMentions(finalTitle);
+    if (finalTitle.length > 75) {
+      finalTitle = '${finalTitle.substring(0, 72)}...';
+    }
+    if (finalTitle.isEmpty) {
+      finalTitle = 'قصة حنين التربوية المصورة للأبطال';
     }
 
+    final String exactOriginalDescription =
+        _cleanOriginalDescription(rawDesc, finalTitle);
+
+    final String repeatPhrase = _extractSmartRepeatPhraseFromContent(
+      finalTitle,
+      exactOriginalDescription,
+      category,
+    );
+
+    final String smartFitMode =
+        sourceMeta.isVerticalSource ? 'auto_cover' : 'contain';
+
     return {
-      'title': generatedTitle,
-      'description': description,
+      'title': finalTitle,
+      'description': exactOriginalDescription,
       'category': category,
       'ageGroup': ageGroup,
       'repeatPhrase': repeatPhrase,
       'activeActivity': activeActivity,
       'emoji': emoji,
       'bgGradientStart': gradStart,
-      'autoFitMode': 'auto_cover',
+      'autoFitMode': smartFitMode,
+      'qualityBadge': sourceMeta.qualityBadge,
     };
   }
 
   static Future<VideoModel> autoImportAndGenerateFromUrl(String rawUrl) async {
     final String cleanUrl = rawUrl.trim();
-    final String? fetchedTitle = await _fetchOEmbedTitle(cleanUrl);
-    final String? resolvedDirectStream =
-        await resolvePlayableStreamFromSocialUrl(cleanUrl);
+    final ImportedVideoSourceMetadata sourceMeta =
+        await fetchHighDefStreamAndExactMetadata(cleanUrl);
 
     final Map<String, dynamic> meta =
         classifyAndGeneratePedagogicalMetadata(
       rawUrl: cleanUrl,
-      fetchedTitle: fetchedTitle,
+      sourceMeta: sourceMeta,
     );
 
     final List<String> reliableFallbackStreams = [
       'https://flutter.github.io/assets-for-api-docs/assets/videos/butterfly.mp4',
       'https://flutter.github.io/assets-for-api-docs/assets/videos/bee.mp4',
     ];
-    final String finalStreamUrl = resolvedDirectStream ??
+    final String finalStreamUrl = sourceMeta.hdStreamUrl ??
         reliableFallbackStreams[
             DateTime.now().millisecond % reliableFallbackStreams.length];
 
     return VideoModel(
-      id: 'v_auto_${DateTime.now().millisecondsSinceEpoch}',
+      id: 'v_auto_${DateTime.now().millisecondsSinceEpoch}_${Random().nextInt(999)}',
       title: meta['title'] as String,
       description: meta['description'] as String,
       category: meta['category'] as String,
@@ -545,9 +862,143 @@ class SmartVideoLinkAutoImporter {
       bgGradientStart: meta['bgGradientStart'] as Color,
       bgGradientEnd: const Color(0xFF0F172A),
       emoji: meta['emoji'] as String,
-      autoFitMode: 'auto_cover',
+      autoFitMode: meta['autoFitMode'] as String,
+      qualityBadge: meta['qualityBadge'] as String,
       likes: 150,
     );
+  }
+
+  static Future<List<VideoModel>> autoImportChannelOrPlaylistFromUrl(
+    String rawUrl, {
+    int maxVideosToImport = 8,
+  }) async {
+    final String trimmed = rawUrl.trim();
+    final List<VideoModel> importedList = [];
+
+    final String? ttUsername = extractTikTokUsernameFromProfile(trimmed);
+    if (ttUsername != null) {
+      try {
+        final apiUri = Uri.parse(
+            'https://www.tikwm.com/api/user/posts?unique_id=${Uri.encodeComponent(ttUsername)}&count=$maxVideosToImport&hd=1');
+        final res =
+            await http.get(apiUri).timeout(const Duration(seconds: 10));
+        if (res.statusCode == 200) {
+          final decoded = jsonDecode(utf8.decode(res.bodyBytes));
+          if (decoded is Map &&
+              decoded['data'] is Map &&
+              (decoded['data'] as Map)['videos'] is List) {
+            final List<dynamic> vids =
+                (decoded['data'] as Map)['videos'] as List<dynamic>;
+            for (final v in vids.take(maxVideosToImport)) {
+              if (v is Map) {
+                final String rawCaption =
+                    stripPlatformMentions((v['title'] ?? '').toString());
+                final String? hdUrl =
+                    (v['hdplay'] ?? v['play'] ?? v['wmplay'])?.toString();
+                if (hdUrl != null && hdUrl.startsWith('http')) {
+                  final sourceMeta = ImportedVideoSourceMetadata(
+                    title: rawCaption.split('\n').first.trim(),
+                    originalDescription: rawCaption,
+                    hdStreamUrl: hdUrl,
+                    qualityBadge: '1080p Full HD',
+                    isVerticalSource: true,
+                  );
+                  final meta = classifyAndGeneratePedagogicalMetadata(
+                    rawUrl: trimmed,
+                    sourceMeta: sourceMeta,
+                  );
+                  importedList.add(
+                    VideoModel(
+                      id: 'v_ch_${DateTime.now().millisecondsSinceEpoch}_${importedList.length}',
+                      title: meta['title'] as String,
+                      description: meta['description'] as String,
+                      category: meta['category'] as String,
+                      ageGroup: meta['ageGroup'] as String,
+                      repeatPhrase: meta['repeatPhrase'] as String,
+                      activeActivity: meta['activeActivity'] as String,
+                      streamUrl: hdUrl,
+                      bgGradientStart: meta['bgGradientStart'] as Color,
+                      bgGradientEnd: const Color(0xFF0F172A),
+                      emoji: meta['emoji'] as String,
+                      autoFitMode: 'auto_cover',
+                      qualityBadge: '1080p Full HD',
+                      likes: 160 + importedList.length * 12,
+                    ),
+                  );
+                }
+              }
+            }
+          }
+        }
+      } catch (_) {}
+
+      if (importedList.isNotEmpty) return importedList;
+    }
+
+    final String? playlistId = extractYouTubePlaylistId(trimmed);
+    final List<String> discoveredVideoIds = [];
+
+    if (playlistId != null) {
+      final List<String> pipedPlaylistApis = [
+        'https://pipedapi.kavin.rocks/playlists/$playlistId',
+        'https://pipedapi.tokhmi.xyz/playlists/$playlistId',
+      ];
+      for (final api in pipedPlaylistApis) {
+        try {
+          final res =
+              await http.get(Uri.parse(api)).timeout(const Duration(seconds: 8));
+          if (res.statusCode == 200) {
+            final decoded = jsonDecode(utf8.decode(res.bodyBytes));
+            if (decoded is Map && decoded['relatedStreams'] is List) {
+              for (final item in (decoded['relatedStreams'] as List)) {
+                if (item is Map && item['url'] != null) {
+                  final String? vidId = extractYouTubeVideoId(
+                      'https://www.youtube.com${item['url']}');
+                  if (vidId != null && !discoveredVideoIds.contains(vidId)) {
+                    discoveredVideoIds.add(vidId);
+                  }
+                }
+              }
+            }
+            if (discoveredVideoIds.isNotEmpty) break;
+          }
+        } catch (_) {}
+      }
+    }
+
+    if (discoveredVideoIds.isEmpty && isYouTubeUrl(trimmed)) {
+      try {
+        final pageRes = await http.get(
+          Uri.parse(trimmed),
+          headers: {'Accept-Language': 'ar,en;q=0.9'},
+        ).timeout(const Duration(seconds: 8));
+        if (pageRes.statusCode == 200) {
+          final html = utf8.decode(pageRes.bodyBytes, allowMalformed: true);
+          final RegExp vidMatches = RegExp(r'"videoId":"([a-zA-Z0-9_-]{11})"');
+          for (final m in vidMatches.allMatches(html)) {
+            final String id = m.group(1)!;
+            if (!discoveredVideoIds.contains(id)) {
+              discoveredVideoIds.add(id);
+              if (discoveredVideoIds.length >= maxVideosToImport) break;
+            }
+          }
+        }
+      } catch (_) {}
+    }
+
+    for (final String vidId in discoveredVideoIds.take(maxVideosToImport)) {
+      final VideoModel v = await autoImportAndGenerateFromUrl(
+        'https://www.youtube.com/watch?v=$vidId',
+      );
+      importedList.add(v);
+    }
+
+    if (importedList.isEmpty) {
+      final single = await autoImportAndGenerateFromUrl(trimmed);
+      importedList.add(single);
+    }
+
+    return importedList;
   }
 }
 
@@ -564,6 +1015,7 @@ class VideoModel {
   final Color bgGradientEnd;
   final String emoji;
   String autoFitMode;
+  String qualityBadge;
   int likes;
   bool isLiked;
 
@@ -580,6 +1032,7 @@ class VideoModel {
     this.bgGradientEnd = const Color(0xFF0F172A),
     this.emoji = '🌟',
     this.autoFitMode = 'auto_cover',
+    this.qualityBadge = '1080p HD',
     this.likes = 120,
     this.isLiked = false,
   });
@@ -639,6 +1092,7 @@ class VideoModel {
           json['bgGradientEnd']?.toString(), const Color(0xFF0F172A)),
       emoji: (json['emoji'] ?? '🌟').toString(),
       autoFitMode: (json['autoFitMode'] ?? 'auto_cover').toString(),
+      qualityBadge: (json['qualityBadge'] ?? '1080p HD').toString(),
       likes: int.tryParse(json['likes']?.toString() ?? '120') ?? 120,
       isLiked: json['isLiked'] == true,
     );
@@ -664,6 +1118,7 @@ class VideoModel {
       'bgGradientEnd': _colorToHex(bgGradientEnd),
       'emoji': emoji,
       'autoFitMode': autoFitMode,
+      'qualityBadge': qualityBadge,
       'likes': likes,
       'isLiked': isLiked,
     };
@@ -2595,14 +3050,35 @@ class AppStateManager extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<VideoModel> smartAutoImportVideoFromLink(String rawUrl) async {
-    final VideoModel generatedVideo =
-        await SmartVideoLinkAutoImporter.autoImportAndGenerateFromUrl(rawUrl);
-    videos.insert(0, generatedVideo);
-    _syncLikedStateForActiveChild();
-    await _saveVideos();
-    notifyListeners();
-    return generatedVideo;
+  Future<List<VideoModel>> smartAutoImportFromAnyUrlOrPlaylist(
+    String rawUrl, {
+    bool forceChannelOrPlaylistMode = false,
+  }) async {
+    final bool isMulti = forceChannelOrPlaylistMode ||
+        SmartVideoLinkAutoImporter.isChannelOrPlaylistUrl(rawUrl);
+
+    if (isMulti) {
+      final List<VideoModel> importedBatch =
+          await SmartVideoLinkAutoImporter.autoImportChannelOrPlaylistFromUrl(
+        rawUrl,
+        maxVideosToImport: 8,
+      );
+      for (final v in importedBatch.reversed) {
+        videos.insert(0, v);
+      }
+      _syncLikedStateForActiveChild();
+      await _saveVideos();
+      notifyListeners();
+      return importedBatch;
+    } else {
+      final VideoModel generatedVideo =
+          await SmartVideoLinkAutoImporter.autoImportAndGenerateFromUrl(rawUrl);
+      videos.insert(0, generatedVideo);
+      _syncLikedStateForActiveChild();
+      await _saveVideos();
+      notifyListeners();
+      return [generatedVideo];
+    }
   }
 
   Future<void> deleteVideo(String videoId) async {
@@ -5905,6 +6381,8 @@ class _VerticalVideoFeedItemWidgetState
   void _cycleVideoFitMode() {
     setState(() {
       if (_fitMode == 'auto_cover') {
+        _fitMode = 'cover_force';
+      } else if (_fitMode == 'cover_force') {
         _fitMode = 'contain';
       } else if (_fitMode == 'contain') {
         _fitMode = 'fill';
@@ -5915,27 +6393,48 @@ class _VerticalVideoFeedItemWidgetState
     });
   }
 
+  bool _showFullDescription = false;
+
   BoxFit _resolveBoxFit() {
-    switch (_fitMode) {
-      case 'contain':
+    if (_fitMode == 'contain') return BoxFit.contain;
+    if (_fitMode == 'fill') return BoxFit.fill;
+    if (_fitMode == 'cover_force') return BoxFit.cover;
+
+    final ctrl = _videoController;
+    if (ctrl != null && _isInitialized) {
+      final double w = ctrl.value.size.width;
+      final double h = ctrl.value.size.height;
+      if (w > 0 && h > 0 && (w / h) > 1.05) {
         return BoxFit.contain;
-      case 'fill':
-        return BoxFit.fill;
-      case 'auto_cover':
-      default:
-        return BoxFit.cover;
+      }
     }
+    return BoxFit.cover;
+  }
+
+  String _liveResolutionLabel() {
+    final ctrl = _videoController;
+    if (ctrl != null && _isInitialized && ctrl.value.size.height > 0) {
+      final int h = ctrl.value.size.height.round();
+      final int w = ctrl.value.size.width.round();
+      final int shortSide = min(w, h);
+      if (shortSide >= 1080) return '1080p Full HD';
+      if (shortSide >= 720) return '720p HD';
+      return '${shortSide}p';
+    }
+    return widget.video.qualityBadge;
   }
 
   String _fitModeLabel() {
     switch (_fitMode) {
+      case 'cover_force':
+        return 'ملء كامل';
       case 'contain':
         return 'أبعاد أصلية';
       case 'fill':
         return 'تمدد كامل';
       case 'auto_cover':
       default:
-        return 'ملء تلقائي';
+        return 'مقاس ذكي HD';
     }
   }
 
@@ -6175,6 +6674,24 @@ class _VerticalVideoFeedItemWidgetState
                           ),
                         ),
                       ),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 8, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFF59E0B).withOpacity(0.25),
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(
+                              color: const Color(0xFFF59E0B).withOpacity(0.7)),
+                        ),
+                        child: Text(
+                          '✨ ${_liveResolutionLabel()}',
+                          style: const TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.bold,
+                            color: Color(0xFFFDE68A),
+                          ),
+                        ),
+                      ),
                     ],
                   ),
                   const SizedBox(height: 10),
@@ -6187,14 +6704,18 @@ class _VerticalVideoFeedItemWidgetState
                     ),
                   ),
                   const SizedBox(height: 6),
-                  Text(
-                    item.description,
-                    maxLines: 3,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      fontSize: 14,
-                      height: 1.4,
-                      color: Colors.white70,
+                  GestureDetector(
+                    onTap: () => setState(
+                        () => _showFullDescription = !_showFullDescription),
+                    child: Text(
+                      item.description,
+                      maxLines: _showFullDescription ? 12 : 3,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 14,
+                        height: 1.45,
+                        color: Colors.white,
+                      ),
                     ),
                   ),
                   const SizedBox(height: 10),
@@ -6931,12 +7452,16 @@ class _ParentalStudioScreenState extends State<ParentalStudioScreen>
   void _submitManualVideoForm() {
     if (!_manualVideoFormKey.currentState!.validate()) return;
 
+    final String cleanManualTitle =
+        SmartVideoLinkAutoImporter.stripPlatformMentions(_vTitleCtrl.text.trim());
+    final String cleanManualDesc =
+        SmartVideoLinkAutoImporter.stripPlatformMentions(_vDescCtrl.text.trim());
     final newVideo = VideoModel(
       id: 'v_${DateTime.now().millisecondsSinceEpoch}',
-      title: _vTitleCtrl.text.trim(),
-      description: _vDescCtrl.text.trim().isEmpty
+      title: cleanManualTitle.isEmpty ? 'قصة حنين التربوية' : cleanManualTitle,
+      description: cleanManualDesc.isEmpty
           ? 'قصة هادئة وممتعة لأطفالنا الأبطال.'
-          : _vDescCtrl.text.trim(),
+          : cleanManualDesc,
       category: _vCategory,
       ageGroup: _vAgeGroup,
       repeatPhrase: _vPhraseCtrl.text.trim().isEmpty
@@ -7557,9 +8082,9 @@ class _ParentalStudioScreenState extends State<ParentalStudioScreen>
                             SizedBox(width: 8),
                             Expanded(
                               child: Text(
-                                '🪄 الاستيراد الذكي الفوري بالرابط فقط (YouTube / TikTok / MP4)',
+                                '🪄 الاستيراد الذكي الفوري (فيديو مفرد / قناة كاملة / قائمة تشغيل)',
                                 style: TextStyle(
-                                  fontSize: 16,
+                                  fontSize: 15,
                                   fontWeight: FontWeight.bold,
                                   color: Colors.white,
                                 ),
@@ -7569,7 +8094,7 @@ class _ParentalStudioScreenState extends State<ParentalStudioScreen>
                         ),
                         const SizedBox(height: 6),
                         const Text(
-                          'الصق رابط الفيديو فقط (من يوتيوب أو تيك توك أو Google Drive أو مسار ملف)، وسيقوم التطبيق آلياً باستيراده وتوليد (عنوان القصة، القسم، الفئة العمرية، جملة ردد معي، ونشاط البطل) وضبط مقاس الفيديو أوتوماتيكياً ليناسب شاشة التطبيق!',
+                          'الصق رابط فيديو مفرد أو رابط قناة كاملة (@channel) أو قائمة تشغيل (Playlist)، وسيقوم التطبيق آلياً باستيراد الفيديوهات بأعلى جودة (1080p HD)، وسحب الوصف الأصلي الصافي (مع فلترة وحذف أي ذكر لأسماء المنصات خارج التطبيق)، وتوليد القسم والفئة العمرية وجملة «ردد معي» ونشاط البطل وضبط المقاس أوتوماتيكياً!',
                           style: TextStyle(
                               fontSize: 12, height: 1.5, color: Colors.white70),
                         ),
@@ -7578,9 +8103,9 @@ class _ParentalStudioScreenState extends State<ParentalStudioScreen>
                           controller: _smartLinkImportCtrl,
                           decoration: InputDecoration(
                             labelText:
-                                'الصق رابط يوتيوب أو تيك توك أو MP4 هنا فقط',
+                                'الصق رابط فيديو أو قناة (@...) أو قائمة تشغيل (Playlist)',
                             hintText:
-                                'https://www.youtube.com/shorts/... أو https://www.tiktok.com/...',
+                                'https://.../playlist?list=... أو https://.../@channel',
                             prefixIcon: const Icon(Icons.bolt_rounded,
                                 color: Color(0xFFF59E0B)),
                             suffixIcon: IconButton(
@@ -7605,7 +8130,7 @@ class _ParentalStudioScreenState extends State<ParentalStudioScreen>
                           children: [
                             Expanded(
                               child: SizedBox(
-                                height: 50,
+                                height: 48,
                                 child: ElevatedButton.icon(
                                   style: ElevatedButton.styleFrom(
                                     backgroundColor: const Color(0xFFF59E0B),
@@ -7624,7 +8149,7 @@ class _ParentalStudioScreenState extends State<ParentalStudioScreen>
                                                 .showSnackBar(
                                               const SnackBar(
                                                 content: Text(
-                                                    'يرجى لصق رابط يوتيوب أو تيك توك أو رابط الفيديو أولاً!'),
+                                                    'يرجى لصق رابط الفيديو أو القناة أو قائمة التشغيل أولاً!'),
                                                 backgroundColor:
                                                     Colors.redAccent,
                                               ),
@@ -7633,37 +8158,44 @@ class _ParentalStudioScreenState extends State<ParentalStudioScreen>
                                           }
                                           setState(
                                               () => _isSmartImporting = true);
-                                          final generated = await widget
+                                          final importedBatch = await widget
                                               .appState
-                                              .smartAutoImportVideoFromLink(
+                                              .smartAutoImportFromAnyUrlOrPlaylist(
                                                   raw);
                                           if (!mounted) return;
+                                          final firstVideo =
+                                              importedBatch.first;
                                           setState(() {
                                             _isSmartImporting = false;
                                             _lastAutoGeneratedPreview =
-                                                generated;
-                                            _vTitleCtrl.text = generated.title;
+                                                firstVideo;
+                                            _vTitleCtrl.text = firstVideo.title;
                                             _vUrlCtrl.text =
-                                                generated.streamUrl;
-                                            _vCategory = generated.category;
-                                            _vAgeGroup = generated.ageGroup;
+                                                firstVideo.streamUrl;
+                                            _vCategory = firstVideo.category;
+                                            _vAgeGroup = firstVideo.ageGroup;
                                             _vDescCtrl.text =
-                                                generated.description;
+                                                firstVideo.description;
                                             _vPhraseCtrl.text =
-                                                generated.repeatPhrase;
+                                                firstVideo.repeatPhrase;
                                             _vActivityCtrl.text =
-                                                generated.activeActivity;
-                                            _vEmojiCtrl.text = generated.emoji;
+                                                firstVideo.activeActivity;
+                                            _vEmojiCtrl.text = firstVideo.emoji;
                                             _smartLinkImportCtrl.clear();
                                           });
                                           CalmVoiceService.instance.speakCalmly(
-                                            'تم استيراد الفيديو وتوليد بيانات القصة وضبط المقاس تلقائياً: ${generated.title}',
+                                            importedBatch.length > 1
+                                                ? 'تم استيراد ${importedBatch.length} قصص من القناة أو قائمة التشغيل وتوليد بياناتها بنجاح!'
+                                                : 'تم استيراد القصة وتوليد بياناتها وضبط المقاس تلقائياً: ${firstVideo.title}',
                                           );
                                           ScaffoldMessenger.of(context)
                                               .showSnackBar(
                                             SnackBar(
                                               content: Text(
-                                                  '✅ تم استيراد وتوليد «${generated.title}» وضبط مقاسه تلقائياً وإضافته للمشغل!'),
+                                                importedBatch.length > 1
+                                                    ? '✅ تم استيراد ${importedBatch.length} فيديوهات من القناة/القائمة وتوليد بياناتها كاملة!'
+                                                    : '✅ تم استيراد وتوليد «${firstVideo.title}» بجودة ${firstVideo.qualityBadge}!',
+                                              ),
                                               backgroundColor:
                                                   const Color(0xFF10B981),
                                             ),
@@ -7681,11 +8213,11 @@ class _ParentalStudioScreenState extends State<ParentalStudioScreen>
                                       : const Icon(Icons.auto_fix_high_rounded),
                                   label: Text(
                                     _isSmartImporting
-                                        ? 'جاري الاستيراد الذكي وتوليد القصة وضبط المقاس...'
-                                        : 'استيراد وتوليد تلقائي وضبط المقاس فوراً 🪄',
+                                        ? 'جاري استيراد الفيديوهات وتوليد القصص...'
+                                        : 'استيراد ذكي (فيديو / قناة / قائمة تشغيل) 🪄',
                                     style: const TextStyle(
                                         fontWeight: FontWeight.bold,
-                                        fontSize: 13),
+                                        fontSize: 12),
                                   ),
                                 ),
                               ),
@@ -7707,7 +8239,7 @@ class _ParentalStudioScreenState extends State<ParentalStudioScreen>
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
                                 Text(
-                                  '✅ تم التوليد الآلي بنجاح: ${_lastAutoGeneratedPreview!.emoji} ${_lastAutoGeneratedPreview!.title}',
+                                  '✅ تم التوليد الآلي بنجاح (${_lastAutoGeneratedPreview!.qualityBadge}): ${_lastAutoGeneratedPreview!.emoji} ${_lastAutoGeneratedPreview!.title}',
                                   style: const TextStyle(
                                     fontWeight: FontWeight.bold,
                                     fontSize: 13,
@@ -7716,7 +8248,9 @@ class _ParentalStudioScreenState extends State<ParentalStudioScreen>
                                 ),
                                 const SizedBox(height: 4),
                                 Text(
-                                  '• القسم: ${VideoModel.getCategoryDisplayLabel(_lastAutoGeneratedPreview!.category)} | العمر: ${_lastAutoGeneratedPreview!.ageGroup} | المقاس: ملء تلقائي (Auto-Resize) — ردد معي: ${_lastAutoGeneratedPreview!.repeatPhrase} — نشاط البطل: ${_lastAutoGeneratedPreview!.activeActivity}',
+                                  '• الوصف الصافي: ${_lastAutoGeneratedPreview!.description} — القسم: ${VideoModel.getCategoryDisplayLabel(_lastAutoGeneratedPreview!.category)} | العمر: ${_lastAutoGeneratedPreview!.ageGroup} — ردد معي: ${_lastAutoGeneratedPreview!.repeatPhrase}',
+                                  maxLines: 4,
+                                  overflow: TextOverflow.ellipsis,
                                   style: const TextStyle(
                                     fontSize: 11,
                                     height: 1.5,
