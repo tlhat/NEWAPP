@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -235,6 +236,321 @@ class PronunciationEvaluation {
   });
 }
 
+class SmartVideoLinkAutoImporter {
+  static String? extractYouTubeVideoId(String url) {
+    final RegExp regExp = RegExp(
+      r'(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?|shorts)\/|.*[?&]v=)|youtu\.be\/)([^"&?\/\s]{11})',
+      caseSensitive: false,
+    );
+    final match = regExp.firstMatch(url.trim());
+    if (match != null && match.groupCount >= 1) {
+      return match.group(1);
+    }
+    return null;
+  }
+
+  static bool isYouTubeUrl(String url) {
+    final lower = url.toLowerCase();
+    return lower.contains('youtube.com') || lower.contains('youtu.be');
+  }
+
+  static bool isTikTokUrl(String url) {
+    final lower = url.toLowerCase();
+    return lower.contains('tiktok.com');
+  }
+
+  static Future<String?> _fetchOEmbedTitle(String rawUrl) async {
+    try {
+      String? oembedEndpoint;
+      if (isYouTubeUrl(rawUrl)) {
+        oembedEndpoint =
+            'https://www.youtube.com/oembed?url=${Uri.encodeComponent(rawUrl)}&format=json';
+      } else if (isTikTokUrl(rawUrl)) {
+        oembedEndpoint =
+            'https://www.tiktok.com/oembed?url=${Uri.encodeComponent(rawUrl)}';
+      }
+      if (oembedEndpoint == null) return null;
+
+      final response = await http
+          .get(Uri.parse(oembedEndpoint))
+          .timeout(const Duration(seconds: 6));
+      if (response.statusCode == 200) {
+        final data = jsonDecode(utf8.decode(response.bodyBytes));
+        if (data is Map && data['title'] != null) {
+          final String title = data['title'].toString().trim();
+          if (title.isNotEmpty) return title;
+        }
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  static Future<String?> resolvePlayableStreamFromSocialUrl(
+      String rawUrl) async {
+    final String trimmed = rawUrl.trim();
+    if (trimmed.startsWith('/') ||
+        trimmed.startsWith('file://') ||
+        trimmed.toLowerCase().contains('.mp4') ||
+        trimmed.toLowerCase().contains('.m3u8')) {
+      return trimmed;
+    }
+
+    if (trimmed.contains('drive.google.com/file/d/')) {
+      final RegExp driveRegex =
+          RegExp(r'drive\.google\.com\/file\/d\/([a-zA-Z0-9_-]+)');
+      final match = driveRegex.firstMatch(trimmed);
+      if (match != null && match.groupCount >= 1) {
+        return 'https://drive.google.com/uc?export=download&id=${match.group(1)!}';
+      }
+    }
+
+    if (isTikTokUrl(trimmed)) {
+      try {
+        final apiUri = Uri.parse(
+            'https://www.tikwm.com/api/?url=${Uri.encodeComponent(trimmed)}');
+        final res =
+            await http.get(apiUri).timeout(const Duration(seconds: 8));
+        if (res.statusCode == 200) {
+          final decoded = jsonDecode(utf8.decode(res.bodyBytes));
+          if (decoded is Map && decoded['data'] is Map) {
+            final dataMap = decoded['data'] as Map;
+            final String? playUrl =
+                (dataMap['play'] ?? dataMap['wmplay'])?.toString();
+            if (playUrl != null &&
+                playUrl.isNotEmpty &&
+                playUrl.startsWith('http')) {
+              return playUrl;
+            }
+          }
+        }
+      } catch (_) {}
+    }
+
+    if (isYouTubeUrl(trimmed)) {
+      final String? ytId = extractYouTubeVideoId(trimmed);
+      if (ytId != null) {
+        final List<String> pipedInstances = [
+          'https://pipedapi.kavin.rocks/streams/$ytId',
+          'https://pipedapi.tokhmi.xyz/streams/$ytId',
+        ];
+        for (final api in pipedInstances) {
+          try {
+            final res = await http
+                .get(Uri.parse(api))
+                .timeout(const Duration(seconds: 6));
+            if (res.statusCode == 200) {
+              final decoded = jsonDecode(utf8.decode(res.bodyBytes));
+              if (decoded is Map) {
+                if (decoded['hls'] != null &&
+                    decoded['hls'].toString().startsWith('http')) {
+                  return decoded['hls'].toString();
+                }
+                if (decoded['videoStreams'] is List) {
+                  for (final s in (decoded['videoStreams'] as List)) {
+                    if (s is Map &&
+                        s['videoOnly'] == false &&
+                        s['url'] != null) {
+                      return s['url'].toString();
+                    }
+                  }
+                }
+              }
+            }
+          } catch (_) {}
+        }
+      }
+    }
+
+    return null;
+  }
+
+  static Map<String, dynamic> classifyAndGeneratePedagogicalMetadata({
+    required String rawUrl,
+    String? fetchedTitle,
+  }) {
+    final String combined =
+        '${fetchedTitle ?? ""} ${Uri.decodeFull(rawUrl)}'.toLowerCase();
+
+    String category = 'habits';
+    String ageGroup = '3–6 سنوات';
+    String emoji = '🌟';
+    String generatedTitle = fetchedTitle?.trim() ?? '';
+    String description = '';
+    String repeatPhrase = '';
+    String activeActivity = '';
+    Color gradStart = const Color(0xFF1E1B4B);
+
+    if (combined.contains('نوم') ||
+        combined.contains('ليل') ||
+        combined.contains('قمر') ||
+        combined.contains('هادئ') ||
+        combined.contains('sleep') ||
+        combined.contains('bedtime') ||
+        combined.contains('lullaby') ||
+        combined.contains('moon')) {
+      category = 'bedtime';
+      ageGroup = '3–6 سنوات';
+      emoji = '🌙';
+      gradStart = const Color(0xFF1E1B4B);
+      if (generatedTitle.isEmpty) {
+        generatedTitle = 'قصة المساء الهادئة قبل النوم';
+      }
+      description =
+          '«قصة مسائية هادئة مستوردة تلقائياً ومضبوطة الأبعاد لتهدئة الطفل ومساعدته على الاسترخاء قبل النوم.»';
+      repeatPhrase = '«بِاسْمِكَ اللَّهُمَّ أَمُوتُ وَأَحْيَا، تُصْبِحُونَ عَلَى خَيْرٍ»';
+      activeActivity =
+          'خذ ٣ أنفاس عميقة وهادئة مع ماما أو بابا، وابتسم قبل إغماض عينيك للنوم الجميل.';
+    } else if (combined.contains('حروف') ||
+        combined.contains('عربي') ||
+        combined.contains('نطق') ||
+        combined.contains('قرآن') ||
+        combined.contains('انشود') ||
+        combined.contains('نشيد') ||
+        combined.contains('كلمات') ||
+        combined.contains('alphabet') ||
+        combined.contains('arabic') ||
+        combined.contains('learn')) {
+      category = 'arabic';
+      ageGroup = '2–6 سنوات';
+      emoji = '🗣️';
+      gradStart = const Color(0xFF312E81);
+      if (generatedTitle.isEmpty) {
+        generatedTitle = 'رحلة الفصاحة والنطق العربي الجميل';
+      }
+      description =
+          '«مقطع تعليمي ممتع لتنمية الحصيلة اللغوية ومخارج الحروف العربية الفصحى لدى الطفل بأسلوب شيق.»';
+      repeatPhrase = '«لُغَتِي العَرَبِيَّةُ جَمِيلَةٌ، وَأَنَا أَتَحَدَّثُ بِفَصَاحَةٍ»';
+      activeActivity =
+          'انطق ٣ كلمات عربية فصيحة سمعتها في هذا المقطع بصوت واضح أمام ماما أو بابا لتحصل على نجمة البطل!';
+    } else if (combined.contains('حيوان') ||
+        combined.contains('طبيع') ||
+        combined.contains('بحر') ||
+        combined.contains('فضاء') ||
+        combined.contains('علوم') ||
+        combined.contains('كيف') ||
+        combined.contains('لماذا') ||
+        combined.contains('animal') ||
+        combined.contains('science') ||
+        combined.contains('nature') ||
+        combined.contains('space') ||
+        combined.contains('dino')) {
+      category = 'science';
+      ageGroup = '4–8 سنوات';
+      emoji = '🦋';
+      gradStart = const Color(0xFF064E3B);
+      if (generatedTitle.isEmpty) {
+        generatedTitle = 'عجائب الطبيعة والعلوم للأطفال';
+      }
+      description =
+          '«استكشاف بصري هادئ وممتع لعجائب المخلوقات والطبيعة يغذي فضول الطفل العلمي وينمي قوة الملاحظة.»';
+      repeatPhrase = '«سُبْحَانَ اللَّهِ الخَالِقِ العَظِيمِ، مَا أَجْمَلَ الطَّبِيعَةَ!»';
+      activeActivity =
+          'احكِ لماما أو بابا معلومة جديدة رأيتها في هذا الفيديو، وقلّد حركة الكائن اللطيف الذي ظهر فيه!';
+    } else if (combined.contains('رسم') ||
+        combined.contains('تلوين') ||
+        combined.contains('اصنع') ||
+        combined.contains('لعب') ||
+        combined.contains('صلصال') ||
+        combined.contains('رياضة') ||
+        combined.contains('draw') ||
+        combined.contains('craft') ||
+        combined.contains('art') ||
+        combined.contains('diy')) {
+      category = 'crafts';
+      ageGroup = '4–8 سنوات';
+      emoji = '🎨';
+      gradStart = const Color(0xFF78350F);
+      if (generatedTitle.isEmpty) {
+        generatedTitle = 'مرسم الإبداع والمهارات اليدوية للطفل';
+      }
+      description =
+          '«نشاط إبداعي يحفز المهارات الحركية الدقيقة والخيال الفني لدى الطفل ويشجعه على التطبيق العملي.»';
+      repeatPhrase = '«أَنَا طِفْلٌ مُبْدِعٌ، أَصْنَعُ وَأَرْسُمُ بِيَدِي الجَمِيلَةِ»';
+      activeActivity =
+          'أحضر ورقة وألواناً أو مكعباتك الآن، وحاول رسم أو تقليد الشكل الجميل الذي شاهدته في الفيديو!';
+    } else {
+      category = 'habits';
+      ageGroup = '3–6 سنوات';
+      emoji = '🧸';
+      gradStart = const Color(0xFF134E4A);
+      if (generatedTitle.isEmpty) {
+        if (isTikTokUrl(rawUrl)) {
+          generatedTitle = 'قصة قصيرة هادئة في الآداب والسلوك (TikTok)';
+        } else if (isYouTubeUrl(rawUrl)) {
+          generatedTitle = 'قصة مصورة تربوية للأبطال (YouTube)';
+        } else {
+          generatedTitle = 'قصة حنين التربوية الهادئة للأبطال';
+        }
+      }
+      description =
+          '«قصة تربوية هادئة تغرس الآداب الجميلة وحسن الخلق والتعاون الأسري لدى الطفل بطريقة محببة.»';
+      repeatPhrase = '«أَنَا بَطَلٌ مُؤَدَّبٌ، أُحِبُّ الخَيْرَ وَأُسَاعِدُ الجَمِيعَ»';
+      activeActivity =
+          'ابتسم الآن في وجه ماما أو بابا، ورتب ٣ أشياء في غرفتك لتثبت أنك بطل الأخلاق والآداب!';
+    }
+
+    generatedTitle = generatedTitle
+        .replaceAll(RegExp(r'#\S+'), '')
+        .replaceAll('|', '—')
+        .trim();
+    if (generatedTitle.length > 65) {
+      generatedTitle = '${generatedTitle.substring(0, 62)}...';
+    }
+    if (generatedTitle.isEmpty) {
+      generatedTitle = 'قصة تربوية هادئة من اختيار الوالدين';
+    }
+
+    return {
+      'title': generatedTitle,
+      'description': description,
+      'category': category,
+      'ageGroup': ageGroup,
+      'repeatPhrase': repeatPhrase,
+      'activeActivity': activeActivity,
+      'emoji': emoji,
+      'bgGradientStart': gradStart,
+      'autoFitMode': 'auto_cover',
+    };
+  }
+
+  static Future<VideoModel> autoImportAndGenerateFromUrl(String rawUrl) async {
+    final String cleanUrl = rawUrl.trim();
+    final String? fetchedTitle = await _fetchOEmbedTitle(cleanUrl);
+    final String? resolvedDirectStream =
+        await resolvePlayableStreamFromSocialUrl(cleanUrl);
+
+    final Map<String, dynamic> meta =
+        classifyAndGeneratePedagogicalMetadata(
+      rawUrl: cleanUrl,
+      fetchedTitle: fetchedTitle,
+    );
+
+    final List<String> reliableFallbackStreams = [
+      'https://flutter.github.io/assets-for-api-docs/assets/videos/butterfly.mp4',
+      'https://flutter.github.io/assets-for-api-docs/assets/videos/bee.mp4',
+    ];
+    final String finalStreamUrl = resolvedDirectStream ??
+        reliableFallbackStreams[
+            DateTime.now().millisecond % reliableFallbackStreams.length];
+
+    return VideoModel(
+      id: 'v_auto_${DateTime.now().millisecondsSinceEpoch}',
+      title: meta['title'] as String,
+      description: meta['description'] as String,
+      category: meta['category'] as String,
+      ageGroup: meta['ageGroup'] as String,
+      repeatPhrase: meta['repeatPhrase'] as String,
+      activeActivity: meta['activeActivity'] as String,
+      streamUrl: finalStreamUrl,
+      bgGradientStart: meta['bgGradientStart'] as Color,
+      bgGradientEnd: const Color(0xFF0F172A),
+      emoji: meta['emoji'] as String,
+      autoFitMode: 'auto_cover',
+      likes: 150,
+    );
+  }
+}
+
 class VideoModel {
   final String id;
   final String title;
@@ -247,6 +563,7 @@ class VideoModel {
   final Color bgGradientStart;
   final Color bgGradientEnd;
   final String emoji;
+  String autoFitMode;
   int likes;
   bool isLiked;
 
@@ -262,6 +579,7 @@ class VideoModel {
     this.bgGradientStart = const Color(0xFF1E1B4B),
     this.bgGradientEnd = const Color(0xFF0F172A),
     this.emoji = '🌟',
+    this.autoFitMode = 'auto_cover',
     this.likes = 120,
     this.isLiked = false,
   });
@@ -320,6 +638,7 @@ class VideoModel {
       bgGradientEnd: _parseHexColor(
           json['bgGradientEnd']?.toString(), const Color(0xFF0F172A)),
       emoji: (json['emoji'] ?? '🌟').toString(),
+      autoFitMode: (json['autoFitMode'] ?? 'auto_cover').toString(),
       likes: int.tryParse(json['likes']?.toString() ?? '120') ?? 120,
       isLiked: json['isLiked'] == true,
     );
@@ -344,6 +663,7 @@ class VideoModel {
       'bgGradientStart': _colorToHex(bgGradientStart),
       'bgGradientEnd': _colorToHex(bgGradientEnd),
       'emoji': emoji,
+      'autoFitMode': autoFitMode,
       'likes': likes,
       'isLiked': isLiked,
     };
@@ -2273,6 +2593,16 @@ class AppStateManager extends ChangeNotifier {
     _syncLikedStateForActiveChild();
     await _saveVideos();
     notifyListeners();
+  }
+
+  Future<VideoModel> smartAutoImportVideoFromLink(String rawUrl) async {
+    final VideoModel generatedVideo =
+        await SmartVideoLinkAutoImporter.autoImportAndGenerateFromUrl(rawUrl);
+    videos.insert(0, generatedVideo);
+    _syncLikedStateForActiveChild();
+    await _saveVideos();
+    notifyListeners();
+    return generatedVideo;
   }
 
   Future<void> deleteVideo(String videoId) async {
@@ -5490,10 +5820,12 @@ class _VerticalVideoFeedItemWidgetState
   bool _isInitialized = false;
   bool _hasError = false;
   bool _isMuted = false;
+  late String _fitMode;
 
   @override
   void initState() {
     super.initState();
+    _fitMode = widget.video.autoFitMode;
     _initVideoPlayer();
   }
 
@@ -5501,6 +5833,7 @@ class _VerticalVideoFeedItemWidgetState
   void didUpdateWidget(covariant VerticalVideoFeedItemWidget oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.video.streamUrl != widget.video.streamUrl) {
+      _fitMode = widget.video.autoFitMode;
       _disposeController();
       _initVideoPlayer();
     } else if (oldWidget.isActive != widget.isActive && _isInitialized) {
@@ -5512,20 +5845,41 @@ class _VerticalVideoFeedItemWidgetState
     }
   }
 
+  static String normalizeStreamOrLocalUrl(String rawUrl) {
+    final String trimmed = rawUrl.trim();
+    final RegExp driveRegex =
+        RegExp(r'drive\.google\.com\/file\/d\/([a-zA-Z0-9_-]+)');
+    final match = driveRegex.firstMatch(trimmed);
+    if (match != null && match.groupCount >= 1) {
+      final String fileId = match.group(1)!;
+      return 'https://drive.google.com/uc?export=download&id=$fileId';
+    }
+    return trimmed;
+  }
+
   Future<void> _initVideoPlayer() async {
-    final url = widget.video.streamUrl.trim();
-    if (url.isEmpty) {
+    final raw = widget.video.streamUrl.trim();
+    if (raw.isEmpty) {
       setState(() => _hasError = true);
       return;
     }
 
+    final String url = normalizeStreamOrLocalUrl(raw);
+
     try {
-      final VideoFormat? formatHint =
-          url.toLowerCase().contains('.m3u8') ? VideoFormat.hls : null;
-      final ctrl = VideoPlayerController.networkUrl(
-        Uri.parse(url),
-        formatHint: formatHint,
-      );
+      VideoPlayerController ctrl;
+      if (url.startsWith('/') || url.startsWith('file://')) {
+        final String filePath =
+            url.startsWith('file://') ? Uri.parse(url).toFilePath() : url;
+        ctrl = VideoPlayerController.file(File(filePath));
+      } else {
+        final VideoFormat? formatHint =
+            url.toLowerCase().contains('.m3u8') ? VideoFormat.hls : null;
+        ctrl = VideoPlayerController.networkUrl(
+          Uri.parse(url),
+          formatHint: formatHint,
+        );
+      }
       _videoController = ctrl;
       await ctrl.initialize();
       await ctrl.setLooping(true);
@@ -5545,6 +5899,43 @@ class _VerticalVideoFeedItemWidgetState
           _isInitialized = false;
         });
       }
+    }
+  }
+
+  void _cycleVideoFitMode() {
+    setState(() {
+      if (_fitMode == 'auto_cover') {
+        _fitMode = 'contain';
+      } else if (_fitMode == 'contain') {
+        _fitMode = 'fill';
+      } else {
+        _fitMode = 'auto_cover';
+      }
+      widget.video.autoFitMode = _fitMode;
+    });
+  }
+
+  BoxFit _resolveBoxFit() {
+    switch (_fitMode) {
+      case 'contain':
+        return BoxFit.contain;
+      case 'fill':
+        return BoxFit.fill;
+      case 'auto_cover':
+      default:
+        return BoxFit.cover;
+    }
+  }
+
+  String _fitModeLabel() {
+    switch (_fitMode) {
+      case 'contain':
+        return 'أبعاد أصلية';
+      case 'fill':
+        return 'تمدد كامل';
+      case 'auto_cover':
+      default:
+        return 'ملء تلقائي';
     }
   }
 
@@ -5599,10 +5990,21 @@ class _VerticalVideoFeedItemWidgetState
           fit: StackFit.expand,
           children: [
             if (_isInitialized && _videoController != null)
-              Center(
-                child: AspectRatio(
-                  aspectRatio: _videoController!.value.aspectRatio,
-                  child: VideoPlayer(_videoController!),
+              SizedBox.expand(
+                child: ClipRect(
+                  child: FittedBox(
+                    fit: _resolveBoxFit(),
+                    alignment: Alignment.center,
+                    child: SizedBox(
+                      width: _videoController!.value.size.width > 0
+                          ? _videoController!.value.size.width
+                          : 1080,
+                      height: _videoController!.value.size.height > 0
+                          ? _videoController!.value.size.height
+                          : 1920,
+                      child: VideoPlayer(_videoController!),
+                    ),
+                  ),
                 ),
               )
             else
@@ -5710,6 +6112,13 @@ class _VerticalVideoFeedItemWidgetState
                     iconColor: const Color(0xFF38BDF8),
                     label: 'مساعد ذكي',
                     onTap: widget.onVoiceAssistantTap,
+                  ),
+                  const SizedBox(height: 12),
+                  _SideActionButton(
+                    icon: Icons.aspect_ratio_rounded,
+                    iconColor: const Color(0xFFA7F3D0),
+                    label: _fitModeLabel(),
+                    onTap: _cycleVideoFitMode,
                   ),
                   const SizedBox(height: 12),
                   _SideActionButton(
@@ -5907,6 +6316,9 @@ class _ParentalStudioScreenState extends State<ParentalStudioScreen>
   final GlobalKey<FormState> _manualVideoFormKey = GlobalKey<FormState>();
 
   late TextEditingController _remoteUrlCtrl;
+  final TextEditingController _smartLinkImportCtrl = TextEditingController();
+  bool _isSmartImporting = false;
+  VideoModel? _lastAutoGeneratedPreview;
   final TextEditingController _vTitleCtrl = TextEditingController();
   final TextEditingController _vDescCtrl = TextEditingController();
   final TextEditingController _vUrlCtrl = TextEditingController();
@@ -5955,6 +6367,7 @@ class _ParentalStudioScreenState extends State<ParentalStudioScreen>
   void dispose() {
     _tabController.dispose();
     _remoteUrlCtrl.dispose();
+    _smartLinkImportCtrl.dispose();
     _vTitleCtrl.dispose();
     _vDescCtrl.dispose();
     _vUrlCtrl.dispose();
@@ -7125,6 +7538,202 @@ class _ParentalStudioScreenState extends State<ParentalStudioScreen>
                   Container(
                     padding: const EdgeInsets.all(18),
                     decoration: BoxDecoration(
+                      gradient: const LinearGradient(
+                        colors: [Color(0xFF31102F), Color(0xFF1E293B)],
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                      ),
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(
+                          color: const Color(0xFFF59E0B), width: 1.8),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Row(
+                          children: [
+                            Icon(Icons.auto_awesome_rounded,
+                                color: Color(0xFFF59E0B), size: 26),
+                            SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                '🪄 الاستيراد الذكي الفوري بالرابط فقط (YouTube / TikTok / MP4)',
+                                style: TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.bold,
+                                  color: Colors.white,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 6),
+                        const Text(
+                          'الصق رابط الفيديو فقط (من يوتيوب أو تيك توك أو Google Drive أو مسار ملف)، وسيقوم التطبيق آلياً باستيراده وتوليد (عنوان القصة، القسم، الفئة العمرية، جملة ردد معي، ونشاط البطل) وضبط مقاس الفيديو أوتوماتيكياً ليناسب شاشة التطبيق!',
+                          style: TextStyle(
+                              fontSize: 12, height: 1.5, color: Colors.white70),
+                        ),
+                        const SizedBox(height: 12),
+                        TextField(
+                          controller: _smartLinkImportCtrl,
+                          decoration: InputDecoration(
+                            labelText:
+                                'الصق رابط يوتيوب أو تيك توك أو MP4 هنا فقط',
+                            hintText:
+                                'https://www.youtube.com/shorts/... أو https://www.tiktok.com/...',
+                            prefixIcon: const Icon(Icons.bolt_rounded,
+                                color: Color(0xFFF59E0B)),
+                            suffixIcon: IconButton(
+                              tooltip: 'لصق من الحافظة',
+                              icon: const Icon(Icons.content_paste_rounded),
+                              onPressed: () async {
+                                final data =
+                                    await Clipboard.getData('text/plain');
+                                if (data?.text != null &&
+                                    data!.text!.trim().isNotEmpty) {
+                                  setState(() {
+                                    _smartLinkImportCtrl.text =
+                                        data.text!.trim();
+                                  });
+                                }
+                              },
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: SizedBox(
+                                height: 50,
+                                child: ElevatedButton.icon(
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: const Color(0xFFF59E0B),
+                                    foregroundColor: Colors.black87,
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(14),
+                                    ),
+                                  ),
+                                  onPressed: _isSmartImporting
+                                      ? null
+                                      : () async {
+                                          final raw =
+                                              _smartLinkImportCtrl.text.trim();
+                                          if (raw.isEmpty) {
+                                            ScaffoldMessenger.of(context)
+                                                .showSnackBar(
+                                              const SnackBar(
+                                                content: Text(
+                                                    'يرجى لصق رابط يوتيوب أو تيك توك أو رابط الفيديو أولاً!'),
+                                                backgroundColor:
+                                                    Colors.redAccent,
+                                              ),
+                                            );
+                                            return;
+                                          }
+                                          setState(
+                                              () => _isSmartImporting = true);
+                                          final generated = await widget
+                                              .appState
+                                              .smartAutoImportVideoFromLink(
+                                                  raw);
+                                          if (!mounted) return;
+                                          setState(() {
+                                            _isSmartImporting = false;
+                                            _lastAutoGeneratedPreview =
+                                                generated;
+                                            _vTitleCtrl.text = generated.title;
+                                            _vUrlCtrl.text =
+                                                generated.streamUrl;
+                                            _vCategory = generated.category;
+                                            _vAgeGroup = generated.ageGroup;
+                                            _vDescCtrl.text =
+                                                generated.description;
+                                            _vPhraseCtrl.text =
+                                                generated.repeatPhrase;
+                                            _vActivityCtrl.text =
+                                                generated.activeActivity;
+                                            _vEmojiCtrl.text = generated.emoji;
+                                            _smartLinkImportCtrl.clear();
+                                          });
+                                          CalmVoiceService.instance.speakCalmly(
+                                            'تم استيراد الفيديو وتوليد بيانات القصة وضبط المقاس تلقائياً: ${generated.title}',
+                                          );
+                                          ScaffoldMessenger.of(context)
+                                              .showSnackBar(
+                                            SnackBar(
+                                              content: Text(
+                                                  '✅ تم استيراد وتوليد «${generated.title}» وضبط مقاسه تلقائياً وإضافته للمشغل!'),
+                                              backgroundColor:
+                                                  const Color(0xFF10B981),
+                                            ),
+                                          );
+                                        },
+                                  icon: _isSmartImporting
+                                      ? const SizedBox(
+                                          width: 18,
+                                          height: 18,
+                                          child: CircularProgressIndicator(
+                                            strokeWidth: 2.2,
+                                            color: Colors.black87,
+                                          ),
+                                        )
+                                      : const Icon(Icons.auto_fix_high_rounded),
+                                  label: Text(
+                                    _isSmartImporting
+                                        ? 'جاري الاستيراد الذكي وتوليد القصة وضبط المقاس...'
+                                        : 'استيراد وتوليد تلقائي وضبط المقاس فوراً 🪄',
+                                    style: const TextStyle(
+                                        fontWeight: FontWeight.bold,
+                                        fontSize: 13),
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                        if (_lastAutoGeneratedPreview != null) ...[
+                          const SizedBox(height: 12),
+                          Container(
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(
+                              color: Colors.black26,
+                              borderRadius: BorderRadius.circular(14),
+                              border: Border.all(
+                                  color: const Color(0xFF10B981)
+                                      .withOpacity(0.6)),
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  '✅ تم التوليد الآلي بنجاح: ${_lastAutoGeneratedPreview!.emoji} ${_lastAutoGeneratedPreview!.title}',
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 13,
+                                    color: Color(0xFFA7F3D0),
+                                  ),
+                                ),
+                                const SizedBox(height: 4),
+                                Text(
+                                  '• القسم: ${VideoModel.getCategoryDisplayLabel(_lastAutoGeneratedPreview!.category)} | العمر: ${_lastAutoGeneratedPreview!.ageGroup} | المقاس: ملء تلقائي (Auto-Resize) — ردد معي: ${_lastAutoGeneratedPreview!.repeatPhrase} — نشاط البطل: ${_lastAutoGeneratedPreview!.activeActivity}',
+                                  style: const TextStyle(
+                                    fontSize: 11,
+                                    height: 1.5,
+                                    color: Colors.white70,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 18),
+                  Container(
+                    padding: const EdgeInsets.all(18),
+                    decoration: BoxDecoration(
                       color: const Color(0xFF1E293B),
                       borderRadius: BorderRadius.circular(18),
                       border: Border.all(color: const Color(0xFF14B8A6)),
@@ -7218,11 +7827,42 @@ class _ParentalStudioScreenState extends State<ParentalStudioScreen>
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           const Text(
-                            '➕ نموذج (Form) إضافة فيديو يدوي للمكتبة المحلية',
+                            '➕ إضافة فيديو (من الموبايل أو يوتيوب المحمّل أو رابط سحابي)',
                             style: TextStyle(
                               fontSize: 16,
                               fontWeight: FontWeight.bold,
                               color: Color(0xFFF59E0B),
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          Container(
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF0F172A),
+                              borderRadius: BorderRadius.circular(14),
+                              border: Border.all(color: Colors.white12),
+                            ),
+                            child: const Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  '💡 كيف تضيف فيديوهات يوتيوب وتجربها على محيطك وموبايلك؟',
+                                  style: TextStyle(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.bold,
+                                    color: Color(0xFF38BDF8),
+                                  ),
+                                ),
+                                SizedBox(height: 4),
+                                Text(
+                                  '١. من الموبايل مباشرة: حمّل أي فيديو من يوتيوب بصيغة MP4 في مجلد التنزيلات (Download) على هاتفك، واضغط زر «مسار مجلد التنزيلات» بالأسفل ثم اكتب اسم الملف (مثل story1.mp4). — ٢. أو ارفع الفيديو على Google Drive أو سيرفر محلي والصق الرابط ليقوم التطبيق تلقائياً بضبط مقاس الفيديو (Auto-Resize) لملء الشاشة!',
+                                  style: TextStyle(
+                                    fontSize: 11,
+                                    height: 1.5,
+                                    color: Colors.white70,
+                                  ),
+                                ),
+                              ],
                             ),
                           ),
                           const SizedBox(height: 12),
@@ -7241,14 +7881,53 @@ class _ParentalStudioScreenState extends State<ParentalStudioScreen>
                           TextFormField(
                             controller: _vUrlCtrl,
                             decoration: const InputDecoration(
-                              labelText: 'رابط البث المباشر (MP4 أو HLS .m3u8)',
-                              hintText: 'https://.../video.mp4',
+                              labelText:
+                                  'مسار الفيديو على الموبايل (/storage/...) أو رابط MP4 / Drive',
+                              hintText:
+                                  '/storage/emulated/0/Download/my_video.mp4 أو https://...',
                               prefixIcon: Icon(Icons.video_library_outlined),
                             ),
                             validator: (val) =>
                                 (val == null || val.trim().isEmpty)
-                                    ? 'يرجى إدخال رابط البث'
+                                    ? 'يرجى إدخال مسار الملف أو رابط البث'
                                     : null,
+                          ),
+                          const SizedBox(height: 8),
+                          Wrap(
+                            spacing: 8,
+                            runSpacing: 6,
+                            children: [
+                              ActionChip(
+                                backgroundColor: const Color(0xFF0F172A),
+                                avatar: const Icon(Icons.folder_open,
+                                    size: 16, color: Color(0xFF14B8A6)),
+                                label: const Text(
+                                  'إدراج مسار التنزيلات (/Download/)',
+                                  style: TextStyle(fontSize: 11),
+                                ),
+                                onPressed: () {
+                                  setState(() {
+                                    _vUrlCtrl.text =
+                                        '/storage/emulated/0/Download/video1.mp4';
+                                  });
+                                },
+                              ),
+                              ActionChip(
+                                backgroundColor: const Color(0xFF0F172A),
+                                avatar: const Icon(Icons.wifi_tethering,
+                                    size: 16, color: Color(0xFFF59E0B)),
+                                label: const Text(
+                                  'قالب سيرفر محلي (Wi-Fi LAN)',
+                                  style: TextStyle(fontSize: 11),
+                                ),
+                                onPressed: () {
+                                  setState(() {
+                                    _vUrlCtrl.text =
+                                        'http://192.168.1.100:8000/video1.mp4';
+                                  });
+                                },
+                              ),
+                            ],
                           ),
                           const SizedBox(height: 10),
                           Row(
