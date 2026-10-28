@@ -23,23 +23,27 @@ jobs:
         with:
           channel: 'stable'
 
-      - name: Generate Fresh Flutter Gradle Project & Copy Source
+      - name: Ensure Android Platform Files (Preserving pubspec.lock & tests)
         run: |
           cp lib/main.dart /tmp/saved_main.dart
           cp pubspec.yaml /tmp/saved_pubspec.yaml
-          rm -rf android ios web linux macos windows test pubspec.lock
+          if [ -f "pubspec.lock" ]; then cp pubspec.lock /tmp/saved_pubspec.lock; fi
+          if [ -d "test" ]; then cp -r test /tmp/saved_test; fi
           flutter create -t app --platforms=android --org com.haneenkids.vod --project-name haneen_kids_vod .
           cp /tmp/saved_main.dart lib/main.dart
           cp /tmp/saved_pubspec.yaml pubspec.yaml
+          if [ -f "/tmp/saved_pubspec.lock" ]; then cp /tmp/saved_pubspec.lock pubspec.lock; fi
+          if [ -d "/tmp/saved_test" ]; then rm -rf test && cp -r /tmp/saved_test test; fi
 
-      - name: Configure Android Manifest Permissions & SDK Versions
+      - name: Configure Android Manifest Permissions, HTTPS-Only Security & SDK Versions
         run: |
           MANIFEST="android/app/src/main/AndroidManifest.xml"
           if ! grep -q "android.permission.INTERNET" "$MANIFEST"; then
             sed -i 's/<manifest[^>]*>/&\n    <uses-permission android:name="android.permission.INTERNET"\/>\n    <uses-permission android:name="android.permission.RECORD_AUDIO"\/>/' "$MANIFEST"
           fi
+          sed -i 's/android:usesCleartextTraffic="true"/android:usesCleartextTraffic="false"/g' "$MANIFEST"
           if ! grep -q "usesCleartextTraffic" "$MANIFEST"; then
-            sed -i 's/<application/<application android:usesCleartextTraffic="true"/' "$MANIFEST"
+            sed -i 's/<application/<application android:usesCleartextTraffic="false"/' "$MANIFEST"
           fi
           if [ -f "android/app/build.gradle" ]; then
             sed -i 's/minSdkVersion flutter.minSdkVersion/minSdkVersion 24/g' android/app/build.gradle
@@ -49,8 +53,11 @@ jobs:
             sed -i 's/minSdk = flutter.minSdkVersion/minSdk = 24/g' android/app/build.gradle.kts
           fi
 
-      - name: Resolve Latest Compatible Dependencies
-        run: flutter pub upgrade --major-versions
+      - name: Resolve Pinned Range Dependencies
+        run: flutter pub get
+
+      - name: Run Automated Security, Isolation & Reward Unit Tests
+        run: flutter test
 
       - name: Build Release APK
         run: flutter build apk --release --no-tree-shake-icons
