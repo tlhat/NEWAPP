@@ -105,6 +105,8 @@ class LocalCredentialSecurityService {
 class AppNetworkPolicyGuard {
   static bool isOfflineOnlyModeActive = false;
   static bool isExternalVideosAllowed = true;
+  static bool reduceMotionActive = false;
+  static bool highContrastActive = false;
   static int blockedNetworkRequestsCount = 0;
 
   static bool canPerformOutboundNetworkRequest({bool isVideoImportOrStream = false}) {
@@ -1925,6 +1927,8 @@ class ChildProfile {
   bool allowMicrophone;
   bool allowExternalVideos;
   bool offlineOnlyMode;
+  bool reduceMotion;
+  bool highContrastMode;
   List<String> completedActivities;
   List<String> completedLessons;
   Map<String, String> unlockedAchievements;
@@ -1957,6 +1961,8 @@ class ChildProfile {
     this.allowMicrophone = true,
     this.allowExternalVideos = true,
     this.offlineOnlyMode = false,
+    this.reduceMotion = false,
+    this.highContrastMode = false,
     List<String>? completedActivities,
     List<String>? completedLessons,
     Map<String, String>? unlockedAchievements,
@@ -2037,6 +2043,8 @@ class ChildProfile {
       allowMicrophone: json['allowMicrophone'] != false,
       allowExternalVideos: json['allowExternalVideos'] != false,
       offlineOnlyMode: json['offlineOnlyMode'] == true,
+      reduceMotion: json['reduceMotion'] == true,
+      highContrastMode: json['highContrastMode'] == true,
       completedActivities: (json['completedActivities'] as List<dynamic>?)
               ?.map((e) => e.toString())
               .toList() ??
@@ -2093,6 +2101,8 @@ class ChildProfile {
       'allowMicrophone': allowMicrophone,
       'allowExternalVideos': allowExternalVideos,
       'offlineOnlyMode': offlineOnlyMode,
+      'reduceMotion': reduceMotion,
+      'highContrastMode': highContrastMode,
       'completedActivities': completedActivities,
       'completedLessons': completedLessons,
       'unlockedAchievements': unlockedAchievements,
@@ -2882,6 +2892,8 @@ class AppStateManager extends ChangeNotifier {
     if (child == null) return;
     AppNetworkPolicyGuard.isOfflineOnlyModeActive = child.offlineOnlyMode;
     AppNetworkPolicyGuard.isExternalVideosAllowed = child.allowExternalVideos;
+    AppNetworkPolicyGuard.reduceMotionActive = child.reduceMotion;
+    AppNetworkPolicyGuard.highContrastActive = child.highContrastMode;
     CalmVoiceService.instance.setChildMicrophoneAllowed(child.allowMicrophone);
   }
 
@@ -4095,6 +4107,8 @@ class AppStateManager extends ChangeNotifier {
     bool? allowMicrophone,
     bool? allowExternalVideos,
     bool? offlineOnlyMode,
+    bool? reduceMotion,
+    bool? highContrastMode,
   }) async {
     if (currentAccount == null) return;
     final idx = currentAccount!.children.indexWhere((c) => c.id == childId);
@@ -4118,6 +4132,18 @@ class AppStateManager extends ChangeNotifier {
       child.offlineOnlyMode = offlineOnlyMode;
       if (child.id == currentAccount!.activeChildId) {
         AppNetworkPolicyGuard.isOfflineOnlyModeActive = offlineOnlyMode;
+      }
+    }
+    if (reduceMotion != null) {
+      child.reduceMotion = reduceMotion;
+      if (child.id == currentAccount!.activeChildId) {
+        AppNetworkPolicyGuard.reduceMotionActive = reduceMotion;
+      }
+    }
+    if (highContrastMode != null) {
+      child.highContrastMode = highContrastMode;
+      if (child.id == currentAccount!.activeChildId) {
+        AppNetworkPolicyGuard.highContrastActive = highContrastMode;
       }
     }
     await _saveAccounts();
@@ -4478,40 +4504,98 @@ class HaneenKidsApp extends StatelessWidget {
     return AnimatedBuilder(
       animation: appState,
       builder: (context, _) {
+        final activeChild = appState.currentAccount?.activeChild;
+        final bool highContrast = activeChild?.highContrastMode ?? false;
+        final Color bgColor =
+            highContrast ? const Color(0xFF050811) : const Color(0xFF0F172A);
+        final Color surfaceColor =
+            highContrast ? const Color(0xFF111827) : const Color(0xFF1E293B);
+        final Color primaryTeal =
+            highContrast ? const Color(0xFF2DD4BF) : const Color(0xFF14B8A6);
+        final Color secondaryAmber =
+            highContrast ? const Color(0xFFFACC15) : const Color(0xFFF59E0B);
+
         return MaterialApp(
-          title: 'حنين كيدز (Haneen Kids v2.5)',
+          title: 'حنين كيدز — منصة التعلم الآمنة للأطفال',
           debugShowCheckedModeBanner: false,
           theme: ThemeData.dark().copyWith(
-            scaffoldBackgroundColor: const Color(0xFF0F172A),
-            colorScheme: const ColorScheme.dark(
-              primary: Color(0xFF14B8A6),
-              secondary: Color(0xFFF59E0B),
-              surface: Color(0xFF1E293B),
+            scaffoldBackgroundColor: bgColor,
+            colorScheme: ColorScheme.dark(
+              primary: primaryTeal,
+              secondary: secondaryAmber,
+              surface: surfaceColor,
+            ),
+            elevatedButtonTheme: ElevatedButtonThemeData(
+              style: ElevatedButton.styleFrom(
+                minimumSize: const Size(88, 48),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(18),
+                ),
+                textStyle: const TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.bold,
+                  height: 1.35,
+                ),
+              ),
+            ),
+            outlinedButtonTheme: OutlinedButtonThemeData(
+              style: OutlinedButton.styleFrom(
+                minimumSize: const Size(88, 48),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 16, vertical: 11),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(18),
+                ),
+              ),
+            ),
+            cardTheme: CardThemeData(
+              color: surfaceColor,
+              elevation: highContrast ? 0 : 2,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(20),
+                side: BorderSide(
+                  color: highContrast ? Colors.white54 : Colors.white12,
+                  width: highContrast ? 1.5 : 1.0,
+                ),
+              ),
             ),
             inputDecorationTheme: InputDecorationTheme(
               filled: true,
-              fillColor: const Color(0xFF1E293B),
+              fillColor: surfaceColor,
               contentPadding:
                   const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
               border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(14),
-                borderSide: const BorderSide(color: Color(0xFF334155)),
+                borderRadius: BorderRadius.circular(16),
+                borderSide: BorderSide(
+                  color: highContrast ? Colors.white54 : const Color(0xFF334155),
+                ),
               ),
               enabledBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(14),
-                borderSide: const BorderSide(color: Color(0xFF334155)),
+                borderRadius: BorderRadius.circular(16),
+                borderSide: BorderSide(
+                  color: highContrast ? Colors.white54 : const Color(0xFF334155),
+                ),
               ),
               focusedBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(14),
-                borderSide:
-                    const BorderSide(color: Color(0xFF14B8A6), width: 2),
+                borderRadius: BorderRadius.circular(16),
+                borderSide: BorderSide(color: primaryTeal, width: 2),
               ),
             ),
           ),
           builder: (context, child) {
-            return Directionality(
-              textDirection: TextDirection.rtl,
-              child: child!,
+            final mediaQuery = MediaQuery.of(context);
+            final clampedScaler = mediaQuery.textScaler.clamp(
+              minScaleFactor: 0.92,
+              maxScaleFactor: 1.22,
+            );
+            return MediaQuery(
+              data: mediaQuery.copyWith(textScaler: clampedScaler),
+              child: Directionality(
+                textDirection: TextDirection.rtl,
+                child: child!,
+              ),
             );
           },
           home: SplashRouterScreen(appState: appState),
@@ -7106,21 +7190,75 @@ class _VerticalVideoFeedPlayerScreenState
         children: [
           if (videos.isEmpty)
             Center(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const Text('📭', style: TextStyle(fontSize: 56)),
-                  const SizedBox(height: 12),
-                  const Text(
-                    'لا توجد قصص في هذا القسم حالياً',
-                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+              child: Padding(
+                padding: const EdgeInsets.all(28),
+                child: Container(
+                  constraints: const BoxConstraints(maxWidth: 420),
+                  padding: const EdgeInsets.all(24),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF1E293B),
+                    borderRadius: BorderRadius.circular(28),
+                    border: Border.all(
+                        color: const Color(0xFF14B8A6).withOpacity(0.6),
+                        width: 1.5),
                   ),
-                  const SizedBox(height: 12),
-                  ElevatedButton(
-                    onPressed: () => setState(() => _selectedCategory = 'all'),
-                    child: const Text('عرض كل القصص'),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Text('🌈🧸✨', style: TextStyle(fontSize: 54)),
+                      const SizedBox(height: 12),
+                      const Text(
+                        'لا توجد قصص مرئية في هذا القسم الآن يا بطل!',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                            fontSize: 18, fontWeight: FontWeight.bold),
+                      ),
+                      const SizedBox(height: 6),
+                      const Text(
+                        'يمكنك استكشاف دروس «أكاديمية حنين» المصورة أو اللعب في واحة الذكاء ريثما نعود للقصص!',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(fontSize: 13, color: Colors.white70),
+                      ),
+                      const SizedBox(height: 16),
+                      Wrap(
+                        spacing: 10,
+                        runSpacing: 10,
+                        alignment: WrapAlignment.center,
+                        children: [
+                          if (_selectedCategory != 'all')
+                            ElevatedButton.icon(
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: const Color(0xFF14B8A6),
+                                foregroundColor: Colors.white,
+                              ),
+                              onPressed: () =>
+                                  setState(() => _selectedCategory = 'all'),
+                              icon: const Icon(Icons.video_library_rounded),
+                              label: const Text('عرض كل القصص'),
+                            ),
+                          ElevatedButton.icon(
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: const Color(0xFF10B981),
+                              foregroundColor: Colors.white,
+                            ),
+                            onPressed: () => _openHaneenAcademy(initialTab: 0),
+                            icon: const Icon(Icons.school_rounded),
+                            label: const Text('أكاديمية حنين 🎓'),
+                          ),
+                          ElevatedButton.icon(
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: const Color(0xFFA855F7),
+                              foregroundColor: Colors.white,
+                            ),
+                            onPressed: _openBrainGamesHub,
+                            icon: const Icon(Icons.psychology_rounded),
+                            label: const Text('ألعاب الذكاء 🧠'),
+                          ),
+                        ],
+                      ),
+                    ],
                   ),
-                ],
+                ),
               ),
             )
           else
@@ -8095,33 +8233,89 @@ class _VerticalVideoFeedItemWidgetState
             else
               Center(
                 child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 32),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(item.emoji, style: const TextStyle(fontSize: 76)),
-                      const SizedBox(height: 16),
-                      if (!_hasError) ...[
-                        const CircularProgressIndicator(
-                            color: Color(0xFF14B8A6)),
-                        const SizedBox(height: 12),
-                        const Text(
-                          'جاري تحضير البث المرئي الهادئ...',
-                          style: TextStyle(color: Colors.white70, fontSize: 14),
-                        ),
-                      ] else ...[
-                        const Text(
-                          'وضع القصة المصورة الهادئة',
-                          style: TextStyle(color: Colors.white70, fontSize: 13),
-                        ),
-                        const SizedBox(height: 8),
-                        OutlinedButton.icon(
-                          onPressed: _initVideoPlayer,
-                          icon: const Icon(Icons.refresh, size: 16),
-                          label: const Text('إعادة تحميل بث الفيديو'),
-                        ),
+                  padding: const EdgeInsets.symmetric(horizontal: 28),
+                  child: Container(
+                    constraints: const BoxConstraints(maxWidth: 380),
+                    padding: const EdgeInsets.all(22),
+                    decoration: BoxDecoration(
+                      color: Colors.black.withOpacity(0.35),
+                      borderRadius: BorderRadius.circular(26),
+                      border: Border.all(color: Colors.white24),
+                    ),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(item.emoji, style: const TextStyle(fontSize: 72)),
+                        const SizedBox(height: 14),
+                        if (!_hasError) ...[
+                          const SizedBox(
+                            width: 38,
+                            height: 38,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 3.5,
+                              color: Color(0xFF14B8A6),
+                            ),
+                          ),
+                          const SizedBox(height: 12),
+                          const Text(
+                            'نحضّر لك القصة بهدوء... استعد يا بطل! 🌟',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 14,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ] else ...[
+                          const Text(
+                            '📖 وضع بطاقة القصة الهادئة',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              color: Color(0xFFFDE68A),
+                              fontSize: 15,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          const SizedBox(height: 6),
+                          const Text(
+                            'يمكنك قراءة القصة وترديد عبارتها الجميلة أو المحاولة مرة أخرى!',
+                            textAlign: TextAlign.center,
+                            style:
+                                TextStyle(color: Colors.white70, fontSize: 12.5),
+                          ),
+                          const SizedBox(height: 12),
+                          Wrap(
+                            spacing: 8,
+                            runSpacing: 8,
+                            alignment: WrapAlignment.center,
+                            children: [
+                              ElevatedButton.icon(
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: const Color(0xFF14B8A6),
+                                  foregroundColor: Colors.white,
+                                ),
+                                onPressed: _initVideoPlayer,
+                                icon: const Icon(Icons.refresh_rounded,
+                                    size: 18),
+                                label: const Text('حاول مرة أخرى'),
+                              ),
+                              if (widget.onAcademyTap != null)
+                                OutlinedButton.icon(
+                                  style: OutlinedButton.styleFrom(
+                                    foregroundColor: const Color(0xFFFDE68A),
+                                    side: const BorderSide(
+                                        color: Color(0xFFFDE68A)),
+                                  ),
+                                  onPressed: widget.onAcademyTap,
+                                  icon: const Icon(Icons.school_rounded,
+                                      size: 18),
+                                  label: const Text('أكاديمية حنين 🎓'),
+                                ),
+                            ],
+                          ),
+                        ],
                       ],
-                    ],
+                    ),
                   ),
                 ),
               ),
@@ -8389,30 +8583,41 @@ class _SideActionButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Container(
-            padding: const EdgeInsets.all(7),
-            decoration: BoxDecoration(
-              color: Colors.black.withOpacity(0.38),
-              shape: BoxShape.circle,
-              border: Border.all(color: Colors.white24, width: 0.8),
+    return Semantics(
+      button: true,
+      label: label,
+      child: Tooltip(
+        message: label,
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: onTap,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: Colors.black.withOpacity(0.45),
+                    shape: BoxShape.circle,
+                    border: Border.all(color: Colors.white30, width: 1.0),
+                  ),
+                  child: Icon(icon, color: iconColor, size: 19),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  label,
+                  style: const TextStyle(
+                    fontSize: 10,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.white,
+                  ),
+                ),
+              ],
             ),
-            child: Icon(icon, color: iconColor, size: 18),
           ),
-          const SizedBox(height: 2),
-          Text(
-            label,
-            style: const TextStyle(
-              fontSize: 9.5,
-              fontWeight: FontWeight.w600,
-              color: Colors.white,
-            ),
-          ),
-        ],
+        ),
       ),
     );
   }
@@ -9346,6 +9551,36 @@ class _ParentalStudioScreenState extends State<ParentalStudioScreen>
                           style: TextStyle(fontSize: 12)),
                       subtitle: const Text(
                           'يمنع التطبيق برمجياً من بدء أي طلبات شبكة خارجية ويشغّل الدروس والألعاب المحلية فقط',
+                          style: TextStyle(fontSize: 10, color: Colors.white60)),
+                    ),
+                    SwitchListTile(
+                      dense: true,
+                      contentPadding: EdgeInsets.zero,
+                      value: activeChild.reduceMotion,
+                      activeColor: const Color(0xFF38BDF8),
+                      onChanged: (v) => widget.appState
+                          .updateChildPrivacyAndSafetyControls(
+                              childId: activeChild.id, reduceMotion: v),
+                      title: const Text(
+                          'تقليل الحركة والمؤثرات البصرية (إمكانية الوصول)',
+                          style: TextStyle(fontSize: 12)),
+                      subtitle: const Text(
+                          'يخفف حركة الشخصيات والانتقالات لراحة العين والأطفال الحساسين للحركة',
+                          style: TextStyle(fontSize: 10, color: Colors.white60)),
+                    ),
+                    SwitchListTile(
+                      dense: true,
+                      contentPadding: EdgeInsets.zero,
+                      value: activeChild.highContrastMode,
+                      activeColor: const Color(0xFFFACC15),
+                      onChanged: (v) => widget.appState
+                          .updateChildPrivacyAndSafetyControls(
+                              childId: activeChild.id, highContrastMode: v),
+                      title: const Text(
+                          'وضع التباين العالي للألوان والحواف (وضوح الرؤية)',
+                          style: TextStyle(fontSize: 12)),
+                      subtitle: const Text(
+                          'يزيد وضوح الحدود وتباين النصوص والأزرار لسهولة القراءة واللمس',
                           style: TextStyle(fontSize: 10, color: Colors.white60)),
                     ),
                     Row(
@@ -11576,13 +11811,16 @@ class _Interactive3DSuperheroAvatarState
       child: AnimatedBuilder(
         animation: _animCtrl,
         builder: (context, _) {
-          final double t = _animCtrl.value * 2 * pi;
-          final bool excited = widget.isJumping || _localBurst;
-          final double hoverOffset =
-              excited ? -sin(t * 3).abs() * 7.0 : sin(t) * 3.2;
-          final double tiltY = sin(t) * 0.22;
-          final double tiltX = cos(t * 0.5) * 0.10;
-          final double scaleBoost = excited ? 1.14 : 1.0;
+          final bool calmMotion = AppNetworkPolicyGuard.reduceMotionActive ||
+              (MediaQuery.maybeOf(context)?.disableAnimations ?? false);
+          final double t = calmMotion ? 0.0 : _animCtrl.value * 2 * pi;
+          final bool excited = !calmMotion && (widget.isJumping || _localBurst);
+          final double hoverOffset = calmMotion
+              ? 0.0
+              : (excited ? -sin(t * 3).abs() * 6.0 : sin(t) * 2.6);
+          final double tiltY = calmMotion ? 0.0 : sin(t) * 0.18;
+          final double tiltX = calmMotion ? 0.0 : cos(t * 0.5) * 0.08;
+          final double scaleBoost = excited ? 1.10 : 1.0;
 
           final Matrix4 perspectiveMatrix = Matrix4.identity()
             ..setEntry(3, 2, 0.0018)
@@ -13160,9 +13398,25 @@ class _BrainGamesHubScreenState extends State<BrainGamesHubScreen> {
                     ),
                   ),
                   Expanded(
-                    child: SingleChildScrollView(
-                      padding: const EdgeInsets.all(14),
-                      child: _buildActiveBrainGameCard(),
+                    child: Center(
+                      child: ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 700),
+                        child: SingleChildScrollView(
+                          padding: const EdgeInsets.all(14),
+                          child: AnimatedSwitcher(
+                            duration: Duration(
+                              milliseconds:
+                                  AppNetworkPolicyGuard.reduceMotionActive
+                                      ? 0
+                                      : 220,
+                            ),
+                            child: KeyedSubtree(
+                              key: ValueKey<int>(_selectedGameIndex),
+                              child: _buildActiveBrainGameCard(),
+                            ),
+                          ),
+                        ),
+                      ),
                     ),
                   ),
                 ],
@@ -15624,9 +15878,37 @@ class _HaneenAcademyScreenState extends State<HaneenAcademyScreen>
           ),
         ),
         Expanded(
-          child: ListView.builder(
-            padding: const EdgeInsets.all(14),
-            itemCount: filteredLessons.length,
+          child: filteredLessons.isEmpty
+              ? Center(
+                  child: Padding(
+                    padding: const EdgeInsets.all(24),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Text('📚✨', style: TextStyle(fontSize: 52)),
+                        const SizedBox(height: 10),
+                        const Text(
+                          'لا توجد دروس في هذا المسار حالياً',
+                          style: TextStyle(
+                              fontSize: 16, fontWeight: FontWeight.bold),
+                        ),
+                        const SizedBox(height: 10),
+                        ElevatedButton.icon(
+                          onPressed: () =>
+                              setState(() => _selectedTrackFilter = 'all'),
+                          icon: const Icon(Icons.school_rounded),
+                          label: const Text('عرض كل المسارات الـ ٩'),
+                        ),
+                      ],
+                    ),
+                  ),
+                )
+              : Center(
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 720),
+                    child: ListView.builder(
+                      padding: const EdgeInsets.all(14),
+                      itemCount: filteredLessons.length,
             itemBuilder: (ctx, i) {
               final lesson = filteredLessons[i];
               final bool isDone = child.completedLessons.contains(lesson.id);
@@ -15933,6 +16215,8 @@ class _HaneenAcademyScreenState extends State<HaneenAcademyScreen>
               );
             },
           ),
+                  ),
+                ),
         ),
       ],
     );
