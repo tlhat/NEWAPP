@@ -1,7 +1,7 @@
 name: haneen_kids_vod
-description: Haneen Kids v2.5 - Safe Vertical Video App for Kids with Google Sign-In, Egyptian Payments, Calm Voice Assistant & Speech Recognition
+description: Haneen Kids v3.0 - Safe Educational Platform for Kids with Haneen Academy, Interactive Stories, 10 Brain Games, PBKDF2 Credential Security & Parental Controls
 publish_to: 'none'
-version: 2.5.0+5
+version: 3.0.0+6
 
 environment:
   sdk: '>=3.2.0 <4.0.0'
@@ -9,17 +9,19 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  video_player: any
-  http: any
-  shared_preferences: any
-  flutter_tts: any
-  speech_to_text: any
-  youtube_explode_dart: any
+  video_player: ^2.8.2
+  http: ^1.2.0
+  shared_preferences: ^2.2.2
+  flutter_tts: ^4.0.2
+  speech_to_text: ^7.0.0
+  youtube_explode_dart: ^2.2.1
+  crypto: ^3.0.3
+  flutter_secure_storage: ^9.0.0
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
-  flutter_lints: any
+  flutter_lints: ^3.0.1
 
 flutter:
   uses-material-design: true
