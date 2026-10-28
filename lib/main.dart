@@ -67,8 +67,9 @@ class CalmVoiceService {
     String text, {
     double rate = 0.38,
     bool forceSpeakEvenIfAssistantMuted = false,
+    bool allowSpeechForRepeatGame = false,
   }) async {
-    if (isAssistantMuted && !forceSpeakEvenIfAssistantMuted) return;
+    if (!allowSpeechForRepeatGame) return;
     try {
       await init();
       final String cleanText = text
@@ -302,17 +303,7 @@ class SmartVideoLinkAutoImporter {
   static bool isYouTubeChannelOrPlaylistUrl(String url) {
     final lower = url.toLowerCase().trim();
     if (!isYouTubeUrl(lower)) return false;
-    if (lower.contains('/playlist') ||
-        (lower.contains('list=') && extractYouTubeVideoId(lower) == null)) {
-      return true;
-    }
-    if (lower.contains('/@') ||
-        lower.contains('/channel/') ||
-        lower.contains('/c/') ||
-        lower.contains('/user/')) {
-      return true;
-    }
-    return false;
+    return extractYouTubePlaylistId(url) != null;
   }
 
   static String? extractTikTokUsernameFromProfile(String url) {
@@ -378,14 +369,11 @@ class SmartVideoLinkAutoImporter {
   }
 
   static Future<bool> detectIfChannelOrPlaylistUrl(String rawUrl) async {
-    final String resolved = await _resolveRedirectUrlIfNeeded(rawUrl);
-    return isYouTubeChannelOrPlaylistUrl(resolved) ||
-        extractTikTokUsernameFromProfile(resolved) != null;
+    return extractYouTubePlaylistId(rawUrl) != null;
   }
 
   static bool isChannelOrPlaylistUrl(String url) {
-    return isYouTubeChannelOrPlaylistUrl(url) ||
-        extractTikTokUsernameFromProfile(url) != null;
+    return extractYouTubePlaylistId(url) != null;
   }
 
   static bool isYouTubeUrl(String url) {
@@ -5508,8 +5496,8 @@ class _VerticalVideoFeedPlayerScreenState
                           border: Border.all(
                               color: const Color(0xFF14B8A6), width: 2),
                         ),
-                        child: const Text('🤖🎙️',
-                            style: TextStyle(fontSize: 30)),
+                        child: const Text('🤖💬',
+                            style: TextStyle(fontSize: 28)),
                       ),
                       const SizedBox(width: 12),
                       Expanded(
@@ -5517,50 +5505,20 @@ class _VerticalVideoFeedPlayerScreenState
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Text(
-                              'رفيق حنين الصوتي الذكي ($childName)',
+                              'المساعد الذكي — نصوص عائمة ($childName)',
                               style: const TextStyle(
-                                fontSize: 18,
+                                fontSize: 17,
                                 fontWeight: FontWeight.bold,
                                 color: Colors.white,
                               ),
                             ),
                             const Text(
-                              'يتحدث بصوت هادئ ويقترح عليك أجمل القصص والأنشطة',
+                              'يظهر رسائل تشجيعية ونصائح عائمة هادئة على الشاشة بدون صوت',
                               style: TextStyle(
                                   fontSize: 12, color: Colors.white70),
                             ),
                           ],
                         ),
-                      ),
-                      IconButton(
-                        tooltip: widget.appState.isAssistantVoiceMuted
-                            ? 'تشغيل صوت المساعد الذكي'
-                            : 'كتم صوت المساعد الذكي',
-                        onPressed: () async {
-                          await widget.appState.toggleVoiceAssistant();
-                          setModalState(() {});
-                        },
-                        icon: Icon(
-                          widget.appState.isAssistantVoiceMuted
-                              ? Icons.volume_off_rounded
-                              : Icons.volume_up_rounded,
-                          color: widget.appState.isAssistantVoiceMuted
-                              ? Colors.redAccent
-                              : const Color(0xFF14B8A6),
-                          size: 26,
-                        ),
-                      ),
-                      IconButton(
-                        tooltip: 'قراءة النص الآن',
-                        onPressed: () {
-                          if (!widget.appState.isAssistantVoiceMuted) {
-                            CalmVoiceService.instance.speakCalmly(
-                              widget.appState.currentAssistantBannerMessage,
-                            );
-                          }
-                        },
-                        icon: const Icon(Icons.play_circle_fill_rounded,
-                            color: Color(0xFFF59E0B), size: 28),
                       ),
                     ],
                   ),
@@ -5771,6 +5729,7 @@ class _VerticalVideoFeedPlayerScreenState
                             CalmVoiceService.instance.speakCalmly(
                               item.repeatPhrase,
                               rate: 0.33,
+                              allowSpeechForRepeatGame: true,
                             );
                           },
                           icon: const Icon(Icons.hearing_rounded),
@@ -5789,6 +5748,7 @@ class _VerticalVideoFeedPlayerScreenState
                             CalmVoiceService.instance.speakCalmly(
                               'هيا نقرأ معاً ببطء وهدوء: ${item.repeatPhrase}',
                               rate: 0.30,
+                              allowSpeechForRepeatGame: true,
                             );
                           },
                           icon: const Icon(Icons.record_voice_over_rounded),
@@ -6558,17 +6518,22 @@ class _VerticalVideoFeedPlayerScreenState
                     onTap: _openSmartVoiceAssistantModal,
                     child: Container(
                       padding: const EdgeInsets.symmetric(
-                          horizontal: 9, vertical: 4),
+                          horizontal: 10, vertical: 5),
                       decoration: BoxDecoration(
-                        color: const Color(0xFF1E293B).withOpacity(0.76),
-                        borderRadius: BorderRadius.circular(12),
+                        gradient: LinearGradient(
+                          colors: [
+                            const Color(0xFF1E293B).withOpacity(0.78),
+                            const Color(0xFF0F172A).withOpacity(0.72),
+                          ],
+                        ),
+                        borderRadius: BorderRadius.circular(14),
                         border: Border.all(
-                            color: const Color(0xFF38BDF8).withOpacity(0.45),
+                            color: const Color(0xFF38BDF8).withOpacity(0.5),
                             width: 0.8),
                       ),
                       child: Row(
                         children: [
-                          const Text('🤖', style: TextStyle(fontSize: 13)),
+                          const Text('💬✨', style: TextStyle(fontSize: 12)),
                           const SizedBox(width: 6),
                           Expanded(
                             child: Text(
@@ -6583,48 +6548,19 @@ class _VerticalVideoFeedPlayerScreenState
                             ),
                           ),
                           const SizedBox(width: 4),
-                          GestureDetector(
-                            onTap: () =>
-                                widget.appState.toggleVoiceAssistant(),
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 6, vertical: 2),
-                              decoration: BoxDecoration(
-                                color: widget.appState.isAssistantVoiceMuted
-                                    ? Colors.redAccent.withOpacity(0.22)
-                                    : const Color(0xFF14B8A6).withOpacity(0.22),
-                                borderRadius: BorderRadius.circular(10),
-                                border: Border.all(
-                                  color: widget.appState.isAssistantVoiceMuted
-                                      ? Colors.redAccent
-                                      : const Color(0xFF14B8A6),
-                                  width: 0.8,
-                                ),
-                              ),
-                              child: Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  Icon(
-                                    widget.appState.isAssistantVoiceMuted
-                                        ? Icons.volume_off_rounded
-                                        : Icons.volume_up_rounded,
-                                    size: 11,
-                                    color: widget.appState.isAssistantVoiceMuted
-                                        ? Colors.redAccent
-                                        : const Color(0xFF14B8A6),
-                                  ),
-                                  const SizedBox(width: 3),
-                                  Text(
-                                    widget.appState.isAssistantVoiceMuted
-                                        ? 'صامت'
-                                        : 'كتم',
-                                    style: const TextStyle(
-                                      fontSize: 9,
-                                      fontWeight: FontWeight.bold,
-                                      color: Colors.white,
-                                    ),
-                                  ),
-                                ],
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 6, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF38BDF8).withOpacity(0.18),
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                            child: const Text(
+                              'نص عائم ✨',
+                              style: TextStyle(
+                                fontSize: 8.5,
+                                fontWeight: FontWeight.bold,
+                                color: Color(0xFFBAE6FD),
                               ),
                             ),
                           ),
@@ -8423,34 +8359,14 @@ class _ParentalStudioScreenState extends State<ParentalStudioScreen>
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  const Expanded(
-                    child: Text(
-                      '🎙️ التحكم في صوت المساعد الذكي وإرسال تنبيه صوتي لموبايل الطفل',
-                      style:
-                          TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
-                    ),
-                  ),
-                  Switch(
-                    value: !widget.appState.isAssistantVoiceMuted,
-                    activeColor: const Color(0xFF14B8A6),
-                    onChanged: (val) =>
-                        widget.appState.toggleVoiceAssistant(val),
-                  ),
-                ],
+              const Text(
+                '💬 إرسال رسالة نصية عائمة فورية لشاشة الطفل عبر المساعد الذكي',
+                style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
               ),
-              Text(
-                widget.appState.isAssistantVoiceMuted
-                    ? '🔇 المساعد الذكي مكتوم حالياً على جهاز الطفل (اضغط المفتاح لإعادة تشغيل الصوت)'
-                    : '🔊 صوت المساعد الذكي مفعّل حالياً على جهاز الطفل',
-                style: TextStyle(
-                  fontSize: 12,
-                  color: widget.appState.isAssistantVoiceMuted
-                      ? Colors.redAccent
-                      : const Color(0xFF14B8A6),
-                ),
+              const SizedBox(height: 4),
+              const Text(
+                '✨ يظهر المساعد الذكي نصوصاً عائمة هادئة أعلى شاشة الطفل بدون إزعاج صوتي.',
+                style: TextStyle(fontSize: 12, color: Color(0xFF38BDF8)),
               ),
               const SizedBox(height: 12),
               Row(
@@ -8459,9 +8375,9 @@ class _ParentalStudioScreenState extends State<ParentalStudioScreen>
                     child: TextField(
                       controller: voiceBroadcastCtrl,
                       decoration: const InputDecoration(
-                        labelText: 'أرسل رسالة ينطقها المساعد الذكي للطفل فوراً',
+                        labelText: 'اكتب رسالة عائمة تظهر للطفل فوراً على الشاشة',
                         hintText: 'مثال: يا فارس حان وقت غسل اليدين والعشاء!',
-                        prefixIcon: Icon(Icons.campaign_outlined),
+                        prefixIcon: Icon(Icons.chat_bubble_outline_rounded),
                       ),
                     ),
                   ),
@@ -8482,12 +8398,12 @@ class _ParentalStudioScreenState extends State<ParentalStudioScreen>
                         ScaffoldMessenger.of(context).showSnackBar(
                           const SnackBar(
                             content: Text(
-                                '🔊 تم إرسال ونطق التنبيه الصوتي على موبايل الطفل!'),
+                                '💬 تم إرسال الرسالة العائمة لشاشة الطفل فوراً!'),
                           ),
                         );
                       }
                     },
-                    child: const Text('إرسال صوتي',
+                    child: const Text('إرسال نص عائم',
                         style: TextStyle(fontWeight: FontWeight.bold)),
                   ),
                 ],
@@ -8770,7 +8686,7 @@ class _ParentalStudioScreenState extends State<ParentalStudioScreen>
                             SizedBox(width: 8),
                             Expanded(
                               child: Text(
-                                '🪄 الاستيراد الذكي الفوري (فيديو مفرد / قناة كاملة / قائمة تشغيل)',
+                                '🪄 الاستيراد الذكي الفوري (فيديو يوتيوب أو تيك توك / قائمة تشغيل يوتيوب)',
                                 style: TextStyle(
                                   fontSize: 15,
                                   fontWeight: FontWeight.bold,
@@ -8782,7 +8698,7 @@ class _ParentalStudioScreenState extends State<ParentalStudioScreen>
                         ),
                         const SizedBox(height: 6),
                         const Text(
-                          'الصق رابط فيديو مفرد أو رابط قناة كاملة (@channel) أو قائمة تشغيل (Playlist)، وسيقوم التطبيق آلياً باستيراد الفيديوهات بأعلى جودة (1080p HD)، وسحب الوصف الأصلي الصافي (مع فلترة وحذف أي ذكر لأسماء المنصات خارج التطبيق)، وتوليد القسم والفئة العمرية وجملة «ردد معي» ونشاط البطل وضبط المقاس أوتوماتيكياً!',
+                          'الصق رابط فيديو من يوتيوب أو تيك توك، أو رابط قائمة تشغيل يوتيوب (Playlist)، وسيقوم التطبيق آلياً باستيراده بأعلى جودة (1080p Full HD)، وسحب الوصف الأصلي الصافي (بدون ذكر أسماء المنصات)، وتوليد القسم والفئة العمرية وجملة «ردد معي» ونشاط البطل وضبط المقاس أوتوماتيكياً!',
                           style: TextStyle(
                               fontSize: 12, height: 1.5, color: Colors.white70),
                         ),
@@ -8791,9 +8707,9 @@ class _ParentalStudioScreenState extends State<ParentalStudioScreen>
                           controller: _smartLinkImportCtrl,
                           decoration: InputDecoration(
                             labelText:
-                                'الصق رابط فيديو أو قناة (@...) أو قائمة تشغيل (Playlist)',
+                                'الصق رابط فيديو (YouTube / TikTok) أو قائمة تشغيل يوتيوب (Playlist)',
                             hintText:
-                                'https://.../playlist?list=... أو https://.../@channel',
+                                'https://www.youtube.com/watch?v=... أو playlist?list=... أو tiktok.com/...',
                             prefixIcon: const Icon(Icons.bolt_rounded,
                                 color: Color(0xFFF59E0B)),
                             suffixIcon: IconButton(
@@ -8915,8 +8831,8 @@ class _ParentalStudioScreenState extends State<ParentalStudioScreen>
                                       : const Icon(Icons.auto_fix_high_rounded),
                                   label: Text(
                                     _isSmartImporting
-                                        ? 'جاري استيراد الفيديوهات وتوليد القصص...'
-                                        : 'استيراد ذكي (فيديو / قناة / قائمة تشغيل) 🪄',
+                                        ? 'جاري استيراد الفيديو / القائمة وتوليد البيانات...'
+                                        : 'استيراد ذكي (فيديو يوتيوب أو تيك توك / قائمة تشغيل) 🪄',
                                     style: const TextStyle(
                                         fontWeight: FontWeight.bold,
                                         fontSize: 12),
@@ -10387,6 +10303,398 @@ const List<CuteHeroCharacterModel> kCuteSuperheroCharacters = [
   ),
 ];
 
+class Interactive3DSuperheroAvatar extends StatefulWidget {
+  final CuteHeroCharacterModel hero;
+  final double size;
+  final bool isJumping;
+  final VoidCallback? onTap;
+
+  const Interactive3DSuperheroAvatar({
+    super.key,
+    required this.hero,
+    this.size = 56,
+    this.isJumping = false,
+    this.onTap,
+  });
+
+  @override
+  State<Interactive3DSuperheroAvatar> createState() =>
+      _Interactive3DSuperheroAvatarState();
+}
+
+class _Interactive3DSuperheroAvatarState
+    extends State<Interactive3DSuperheroAvatar>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _animCtrl;
+  bool _localBurst = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _animCtrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 2400),
+    )..repeat();
+  }
+
+  @override
+  void dispose() {
+    _animCtrl.dispose();
+    super.dispose();
+  }
+
+  void _handleTap() {
+    setState(() => _localBurst = true);
+    Future.delayed(const Duration(milliseconds: 650), () {
+      if (mounted) setState(() => _localBurst = false);
+    });
+    widget.onTap?.call();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: _handleTap,
+      child: AnimatedBuilder(
+        animation: _animCtrl,
+        builder: (context, _) {
+          final double t = _animCtrl.value * 2 * pi;
+          final bool excited = widget.isJumping || _localBurst;
+          final double hoverOffset =
+              excited ? -sin(t * 3).abs() * 7.0 : sin(t) * 3.2;
+          final double tiltY = sin(t) * 0.22;
+          final double tiltX = cos(t * 0.5) * 0.10;
+          final double scaleBoost = excited ? 1.14 : 1.0;
+
+          final Matrix4 perspectiveMatrix = Matrix4.identity()
+            ..setEntry(3, 2, 0.0018)
+            ..rotateY(tiltY)
+            ..rotateX(tiltX)
+            ..scale(scaleBoost);
+
+          return Transform.translate(
+            offset: Offset(0, hoverOffset),
+            child: Transform(
+              alignment: Alignment.center,
+              transform: perspectiveMatrix,
+              child: SizedBox(
+                width: widget.size,
+                height: widget.size,
+                child: CustomPaint(
+                  painter: _Superhero3DCharacterPainter(
+                    hero: widget.hero,
+                    phase: t,
+                    isExcited: excited,
+                  ),
+                ),
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+}
+
+class _Superhero3DCharacterPainter extends CustomPainter {
+  final CuteHeroCharacterModel hero;
+  final double phase;
+  final bool isExcited;
+
+  const _Superhero3DCharacterPainter({
+    required this.hero,
+    required this.phase,
+    required this.isExcited,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final double cx = size.width / 2;
+    final double cy = size.height / 2;
+    final double r = min(size.width, size.height) * 0.34;
+
+    final Paint shadowPaint = Paint()
+      ..color = Colors.black.withOpacity(0.38)
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4);
+    canvas.drawOval(
+      Rect.fromCenter(
+        center: Offset(cx, size.height * 0.91),
+        width: r * (1.2 - sin(phase) * 0.15),
+        height: r * 0.28,
+      ),
+      shadowPaint,
+    );
+
+    final Paint auraPaint = Paint()
+      ..shader = RadialGradient(
+        colors: [
+          hero.primaryColor.withOpacity(isExcited ? 0.65 : 0.42),
+          hero.secondaryColor.withOpacity(0.15),
+          Colors.transparent,
+        ],
+      ).createShader(
+          Rect.fromCircle(center: Offset(cx, cy), radius: r * 1.45));
+    canvas.drawCircle(Offset(cx, cy), r * 1.42, auraPaint);
+
+    final Path capePath = Path();
+    final double capeWave = sin(phase * 1.5) * (r * 0.22);
+    capePath.moveTo(cx - r * 0.55, cy - r * 0.1);
+    capePath.quadraticBezierTo(
+      cx - r * 0.85 + capeWave,
+      cy + r * 0.55,
+      cx - r * 0.50 + capeWave,
+      cy + r * 0.92,
+    );
+    capePath.lineTo(cx + r * 0.50 + capeWave * 0.6, cy + r * 0.90);
+    capePath.quadraticBezierTo(
+      cx + r * 0.80,
+      cy + r * 0.45,
+      cx + r * 0.55,
+      cy - r * 0.1,
+    );
+    capePath.close();
+    final Paint capePaint = Paint()
+      ..shader = LinearGradient(
+        colors: [hero.secondaryColor, hero.primaryColor.withOpacity(0.85)],
+        begin: Alignment.topCenter,
+        end: Alignment.bottomCenter,
+      ).createShader(Rect.fromCircle(center: Offset(cx, cy), radius: r));
+    canvas.drawPath(capePath, capePaint);
+
+    final Rect torsoRect = Rect.fromCenter(
+      center: Offset(cx, cy + r * 0.46),
+      width: r * 1.05,
+      height: r * 0.82,
+    );
+    final Paint torsoPaint = Paint()
+      ..shader = RadialGradient(
+        center: const Alignment(-0.3, -0.3),
+        radius: 0.95,
+        colors: [
+          Color.lerp(hero.primaryColor, Colors.white, 0.35)!,
+          hero.primaryColor,
+          Color.lerp(hero.primaryColor, Colors.black, 0.35)!,
+        ],
+      ).createShader(torsoRect);
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(torsoRect, Radius.circular(r * 0.42)),
+      torsoPaint,
+    );
+
+    final Paint emblemPaint = Paint()
+      ..color = const Color(0xFFFDE047)
+      ..style = PaintingStyle.fill;
+    canvas.drawCircle(Offset(cx, cy + r * 0.42), r * 0.18, emblemPaint);
+
+    final double leftArmAngle = -0.35 + cos(phase) * 0.15;
+    canvas.save();
+    canvas.translate(cx - r * 0.52, cy + r * 0.25);
+    canvas.rotate(leftArmAngle);
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(
+        Rect.fromLTWH(-r * 0.22, 0, r * 0.22, r * 0.52),
+        Radius.circular(r * 0.12),
+      ),
+      torsoPaint,
+    );
+    canvas.restore();
+
+    final double waveSpeed = isExcited ? 3.0 : 1.8;
+    final double rightArmWaveAngle = -2.25 + sin(phase * waveSpeed) * 0.48;
+    canvas.save();
+    canvas.translate(cx + r * 0.48, cy + r * 0.22);
+    canvas.rotate(rightArmWaveAngle);
+    final Paint arm3DPaint = Paint()
+      ..shader = LinearGradient(
+        colors: [
+          Color.lerp(hero.primaryColor, Colors.white, 0.3)!,
+          hero.primaryColor,
+        ],
+      ).createShader(Rect.fromLTWH(0, 0, r * 0.28, r * 0.65));
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(
+        Rect.fromLTWH(-r * 0.12, 0, r * 0.24, r * 0.58),
+        Radius.circular(r * 0.12),
+      ),
+      arm3DPaint,
+    );
+    final Paint glovePaint = Paint()
+      ..shader = const RadialGradient(
+        colors: [Colors.white, Color(0xFFFDE047)],
+      ).createShader(
+          Rect.fromCircle(center: Offset(0, r * 0.62), radius: r * 0.18));
+    canvas.drawCircle(Offset(0, r * 0.62), r * 0.16, glovePaint);
+    canvas.restore();
+
+    final Offset headCenter = Offset(cx, cy - r * 0.18);
+    final double headRadius = r * 0.62;
+    final Paint head3DPaint = Paint()
+      ..shader = RadialGradient(
+        center: const Alignment(-0.35, -0.38),
+        radius: 0.95,
+        colors: [
+          const Color(0xFFFFF1E6),
+          hero.id == 'sponge_smile' || hero.id == 'pika_spark'
+              ? const Color(0xFFFDE047)
+              : (hero.id == 'spidey_hero'
+                  ? const Color(0xFFEF4444)
+                  : const Color(0xFFFDBA74)),
+          Color.lerp(hero.primaryColor, Colors.black, 0.25)!,
+        ],
+        stops: const [0.0, 0.65, 1.0],
+      ).createShader(
+          Rect.fromCircle(center: headCenter, radius: headRadius));
+    canvas.drawCircle(headCenter, headRadius, head3DPaint);
+
+    if (hero.id == 'bat_knight' ||
+        hero.id == 'pika_spark' ||
+        hero.id == 'simba_cub') {
+      final Paint earPaint = Paint()
+        ..color = hero.id == 'bat_knight'
+            ? const Color(0xFF1E293B)
+            : hero.primaryColor;
+      final Path leftEar = Path()
+        ..moveTo(headCenter.dx - headRadius * 0.7, headCenter.dy - headRadius * 0.5)
+        ..lineTo(headCenter.dx - headRadius * 0.9, headCenter.dy - headRadius * 1.15)
+        ..lineTo(headCenter.dx - headRadius * 0.25, headCenter.dy - headRadius * 0.8)
+        ..close();
+      final Path rightEar = Path()
+        ..moveTo(headCenter.dx + headRadius * 0.7, headCenter.dy - headRadius * 0.5)
+        ..lineTo(headCenter.dx + headRadius * 0.9, headCenter.dy - headRadius * 1.15)
+        ..lineTo(headCenter.dx + headRadius * 0.25, headCenter.dy - headRadius * 0.8)
+        ..close();
+      canvas.drawPath(leftEar, earPaint);
+      canvas.drawPath(rightEar, earPaint);
+    }
+
+    if (hero.id == 'elsa_princess' || hero.id == 'simba_cub') {
+      final Paint crownPaint = Paint()..color = const Color(0xFFFACC15);
+      final Path crown = Path()
+        ..moveTo(headCenter.dx - headRadius * 0.45, headCenter.dy - headRadius * 0.82)
+        ..lineTo(headCenter.dx - headRadius * 0.35, headCenter.dy - headRadius * 1.18)
+        ..lineTo(headCenter.dx - headRadius * 0.12, headCenter.dy - headRadius * 0.92)
+        ..lineTo(headCenter.dx, headCenter.dy - headRadius * 1.25)
+        ..lineTo(headCenter.dx + headRadius * 0.12, headCenter.dy - headRadius * 0.92)
+        ..lineTo(headCenter.dx + headRadius * 0.35, headCenter.dy - headRadius * 1.18)
+        ..lineTo(headCenter.dx + headRadius * 0.45, headCenter.dy - headRadius * 0.82)
+        ..close();
+      canvas.drawPath(crown, crownPaint);
+    }
+
+    final Rect maskRect = Rect.fromCenter(
+      center: Offset(headCenter.dx, headCenter.dy - headRadius * 0.06),
+      width: headRadius * 1.55,
+      height: headRadius * 0.65,
+    );
+    final Paint maskPaint = Paint()
+      ..shader = LinearGradient(
+        colors: [
+          hero.primaryColor.withOpacity(0.92),
+          hero.secondaryColor.withOpacity(0.92),
+        ],
+      ).createShader(maskRect);
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(maskRect, Radius.circular(headRadius * 0.32)),
+      maskPaint,
+    );
+
+    final bool isBlinking = (sin(phase * 2.2) > 0.94);
+    final double eyeH = isBlinking ? headRadius * 0.05 : headRadius * 0.26;
+    final Paint eyeWhite = Paint()..color = Colors.white;
+    final Paint pupilPaint = Paint()..color = const Color(0xFF0F172A);
+
+    final Offset leftEyeCenter =
+        Offset(headCenter.dx - headRadius * 0.32, headCenter.dy - headRadius * 0.06);
+    final Offset rightEyeCenter =
+        Offset(headCenter.dx + headRadius * 0.32, headCenter.dy - headRadius * 0.06);
+
+    canvas.drawOval(
+      Rect.fromCenter(
+          center: leftEyeCenter, width: headRadius * 0.30, height: eyeH),
+      eyeWhite,
+    );
+    canvas.drawOval(
+      Rect.fromCenter(
+          center: rightEyeCenter, width: headRadius * 0.30, height: eyeH),
+      eyeWhite,
+    );
+
+    if (!isBlinking) {
+      final double lookOffset = sin(phase) * (headRadius * 0.05);
+      canvas.drawCircle(
+        leftEyeCenter.translate(lookOffset, 0),
+        headRadius * 0.11,
+        pupilPaint,
+      );
+      canvas.drawCircle(
+        rightEyeCenter.translate(lookOffset, 0),
+        headRadius * 0.11,
+        pupilPaint,
+      );
+      canvas.drawCircle(
+        leftEyeCenter.translate(lookOffset - headRadius * 0.04, -headRadius * 0.04),
+        headRadius * 0.04,
+        eyeWhite,
+      );
+      canvas.drawCircle(
+        rightEyeCenter.translate(lookOffset - headRadius * 0.04, -headRadius * 0.04),
+        headRadius * 0.04,
+        eyeWhite,
+      );
+    }
+
+    final Paint smilePaint = Paint()
+      ..color = Colors.white
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = max(1.5, headRadius * 0.09)
+      ..strokeCap = StrokeCap.round;
+    canvas.drawArc(
+      Rect.fromCenter(
+        center: Offset(headCenter.dx, headCenter.dy + headRadius * 0.24),
+        width: headRadius * 0.65,
+        height: headRadius * 0.42,
+      ),
+      0.15,
+      pi - 0.3,
+      false,
+      smilePaint,
+    );
+
+    final Paint specularPaint = Paint()
+      ..color = Colors.white.withOpacity(0.45)
+      ..style = PaintingStyle.fill;
+    canvas.drawOval(
+      Rect.fromCenter(
+        center: Offset(
+            headCenter.dx - headRadius * 0.35, headCenter.dy - headRadius * 0.48),
+        width: headRadius * 0.32,
+        height: headRadius * 0.16,
+      ),
+      specularPaint,
+    );
+
+    final int starCount = isExcited ? 6 : 4;
+    for (int i = 0; i < starCount; i++) {
+      final double angle = phase * 1.4 + (i * 2 * pi / starCount);
+      final double orbitR = r * (1.18 + 0.15 * sin(phase * 2 + i));
+      final Offset p = Offset(
+        cx + cos(angle) * orbitR,
+        cy + sin(angle) * orbitR * 0.75,
+      );
+      final Paint sparkPaint = Paint()
+        ..color = i.isEven ? const Color(0xFFFDE047) : Colors.white;
+      canvas.drawCircle(p, isExcited ? r * 0.10 : r * 0.07, sparkPaint);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _Superhero3DCharacterPainter oldDelegate) {
+    return oldDelegate.phase != phase ||
+        oldDelegate.isExcited != isExcited ||
+        oldDelegate.hero.id != hero.id;
+  }
+}
+
 class CuteSuperheroCompanionBanner extends StatefulWidget {
   final AppStateManager appState;
   final bool compactMode;
@@ -10408,16 +10716,27 @@ class _CuteSuperheroCompanionBannerState
     extends State<CuteSuperheroCompanionBanner> {
   int _heroIndex = 0;
   int _alertIndex = 0;
+  bool _isJumping = false;
 
   void _cycleNextHero() {
     setState(() {
       _heroIndex = (_heroIndex + 1) % kCuteSuperheroCharacters.length;
       _alertIndex = (_alertIndex + 1) % 3;
+      _isJumping = true;
     });
-    final hero = kCuteSuperheroCharacters[_heroIndex];
-    final msg = hero.encouragingAlerts[
-        _alertIndex % hero.encouragingAlerts.length];
-    CalmVoiceService.instance.speakCalmly('${hero.nameAr} يقول لك: $msg');
+    Future.delayed(const Duration(milliseconds: 700), () {
+      if (mounted) setState(() => _isJumping = false);
+    });
+  }
+
+  void _triggerHeroWaveAndCheer() {
+    setState(() {
+      _alertIndex = (_alertIndex + 1) % 3;
+      _isJumping = true;
+    });
+    Future.delayed(const Duration(milliseconds: 700), () {
+      if (mounted) setState(() => _isJumping = false);
+    });
   }
 
   void _openHeroFriendsGalleryModal() {
@@ -10439,22 +10758,22 @@ class _CuteSuperheroCompanionBannerState
                 children: [
                   const Row(
                     children: [
-                      Text('🦸‍♂️🌟', style: TextStyle(fontSize: 30)),
+                      Text('🦸‍♂️✨', style: TextStyle(fontSize: 28)),
                       SizedBox(width: 10),
                       Expanded(
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Text(
-                              'أصدقاؤك الأبطال الخارقون والشخصيات الكرتونية',
+                              'أصدقاؤك الأبطال الخارقون (مجسمات 3D متحركة ومتفاعلة)',
                               style: TextStyle(
-                                fontSize: 17,
+                                fontSize: 16,
                                 fontWeight: FontWeight.bold,
                                 color: Colors.white,
                               ),
                             ),
                             Text(
-                              'اختر بطلك المفضل ليرافقك بتنبيهات لطيفة وتشجيعية بصوت هادئ!',
+                              'اضغط على أي بطل 3D ليلوّح بيده ويقفز ويرافقك على الشاشة بنصوص عائمة مبهجة!',
                               style: TextStyle(
                                   fontSize: 12, color: Colors.white70),
                             ),
@@ -10465,7 +10784,7 @@ class _CuteSuperheroCompanionBannerState
                   ),
                   const SizedBox(height: 14),
                   SizedBox(
-                    height: 360,
+                    height: 390,
                     child: ListView.builder(
                       itemCount: kCuteSuperheroCharacters.length,
                       itemBuilder: (ctx, i) {
@@ -10477,11 +10796,13 @@ class _CuteSuperheroCompanionBannerState
                           onTap: () {
                             setState(() {
                               _heroIndex = i;
+                              _isJumping = true;
                             });
                             setModalState(() {});
-                            CalmVoiceService.instance.speakCalmly(
-                              '${h.nameAr} يشجعك ويقول: $alertMsg',
-                            );
+                            Future.delayed(const Duration(milliseconds: 700),
+                                () {
+                              if (mounted) setState(() => _isJumping = false);
+                            });
                           },
                           child: Container(
                             margin: const EdgeInsets.only(bottom: 10),
@@ -10503,17 +10824,17 @@ class _CuteSuperheroCompanionBannerState
                             ),
                             child: Row(
                               children: [
-                                Container(
-                                  padding: const EdgeInsets.all(10),
-                                  decoration: BoxDecoration(
-                                    color: h.primaryColor.withOpacity(0.25),
-                                    shape: BoxShape.circle,
-                                    border: Border.all(color: h.primaryColor),
-                                  ),
-                                  child: Text(
-                                    h.avatarEmoji,
-                                    style: const TextStyle(fontSize: 28),
-                                  ),
+                                Interactive3DSuperheroAvatar(
+                                  hero: h,
+                                  size: 64,
+                                  isJumping: isSelected,
+                                  onTap: () {
+                                    setState(() {
+                                      _heroIndex = i;
+                                      _isJumping = true;
+                                    });
+                                    setModalState(() {});
+                                  },
                                 ),
                                 const SizedBox(width: 12),
                                 Expanded(
@@ -10542,7 +10863,7 @@ class _CuteSuperheroCompanionBannerState
                                                   BorderRadius.circular(10),
                                             ),
                                             child: Text(
-                                              h.titleBadge,
+                                              '3D متفاعل 👋',
                                               style: TextStyle(
                                                 fontSize: 10,
                                                 color: h.primaryColor,
@@ -10563,15 +10884,6 @@ class _CuteSuperheroCompanionBannerState
                                       ),
                                     ],
                                   ),
-                                ),
-                                IconButton(
-                                  onPressed: () {
-                                    CalmVoiceService.instance.speakCalmly(
-                                      '${h.nameAr} يقول لك: $alertMsg',
-                                    );
-                                  },
-                                  icon: const Icon(Icons.volume_up_rounded,
-                                      color: Colors.white),
                                 ),
                               ],
                             ),
@@ -10601,110 +10913,113 @@ class _CuteSuperheroCompanionBannerState
       child: Container(
         padding: EdgeInsets.symmetric(
           horizontal: widget.compactMode ? 9 : 12,
-          vertical: widget.compactMode ? 4 : 10,
+          vertical: widget.compactMode ? 3 : 8,
         ),
         decoration: BoxDecoration(
           gradient: LinearGradient(
             colors: [
-              hero.primaryColor.withOpacity(widget.compactMode ? 0.24 : 0.32),
+              hero.primaryColor.withOpacity(widget.compactMode ? 0.26 : 0.34),
               hero.secondaryColor.withOpacity(widget.compactMode ? 0.18 : 0.25),
-              const Color(0xFF1E293B).withOpacity(widget.compactMode ? 0.78 : 0.92),
+              const Color(0xFF1E293B)
+                  .withOpacity(widget.compactMode ? 0.80 : 0.92),
             ],
           ),
-          borderRadius: BorderRadius.circular(widget.compactMode ? 12 : 18),
+          borderRadius: BorderRadius.circular(widget.compactMode ? 14 : 20),
           border: Border.all(
-            color: hero.primaryColor.withOpacity(0.6),
-            width: widget.compactMode ? 0.9 : 1.5,
+            color: hero.primaryColor.withOpacity(0.7),
+            width: widget.compactMode ? 1.0 : 1.5,
           ),
+          boxShadow: [
+            BoxShadow(
+              color: hero.primaryColor.withOpacity(0.25),
+              blurRadius: 10,
+              spreadRadius: 1,
+            ),
+          ],
         ),
         child: Row(
           children: [
-            GestureDetector(
-              onTap: _cycleNextHero,
-              child: Container(
-                padding: EdgeInsets.all(widget.compactMode ? 4 : 6),
-                decoration: BoxDecoration(
-                  color: hero.primaryColor.withOpacity(0.22),
-                  shape: BoxShape.circle,
-                  border: Border.all(color: hero.primaryColor, width: 0.8),
-                ),
-                child: Text(
-                  hero.avatarEmoji,
-                  style: TextStyle(fontSize: widget.compactMode ? 14 : 26),
-                ),
-              ),
+            Interactive3DSuperheroAvatar(
+              hero: hero,
+              size: widget.compactMode ? 36 : 58,
+              isJumping: _isJumping,
+              onTap: _triggerHeroWaveAndCheer,
             ),
-            SizedBox(width: widget.compactMode ? 6 : 10),
+            SizedBox(width: widget.compactMode ? 8 : 12),
             Expanded(
-              child: widget.compactMode
-                  ? Text(
-                      '${hero.nameAr}: $message',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        fontSize: 10,
-                        color: Colors.white,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    )
-                  : Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Row(
-                          children: [
-                            Text(
-                              hero.nameAr,
-                              style: const TextStyle(
-                                fontSize: 13,
-                                fontWeight: FontWeight.bold,
-                                color: Color(0xFFFDE68A),
-                              ),
-                            ),
-                            const SizedBox(width: 6),
-                            Flexible(
-                              child: Text(
-                                '• ${hero.titleBadge}',
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
+              child: GestureDetector(
+                onTap: _triggerHeroWaveAndCheer,
+                child: widget.compactMode
+                    ? Text(
+                        '👋 ${hero.nameAr}: $message',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontSize: 10.5,
+                          color: Colors.white,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      )
+                    : Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Row(
+                            children: [
+                              Text(
+                                '👋 ${hero.nameAr}',
                                 style: const TextStyle(
-                                  fontSize: 10,
-                                  color: Colors.white70,
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.bold,
+                                  color: Color(0xFFFDE68A),
                                 ),
                               ),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 2),
-                        Text(
-                          '💬 $message',
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                            fontSize: 12,
-                            color: Colors.white,
-                            fontWeight: FontWeight.w600,
+                              const SizedBox(width: 6),
+                              Flexible(
+                                child: Text(
+                                  '• ${hero.titleBadge}',
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                    fontSize: 10,
+                                    color: Colors.white70,
+                                  ),
+                                ),
+                              ),
+                            ],
                           ),
-                        ),
-                      ],
-                    ),
+                          const SizedBox(height: 3),
+                          Text(
+                            '💬 $message',
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              fontSize: 12,
+                              color: Colors.white,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ],
+                      ),
+              ),
             ),
             const SizedBox(width: 4),
             GestureDetector(
               onTap: _cycleNextHero,
               child: Container(
                 padding: EdgeInsets.symmetric(
-                  horizontal: widget.compactMode ? 6 : 8,
-                  vertical: widget.compactMode ? 2 : 4,
+                  horizontal: widget.compactMode ? 7 : 9,
+                  vertical: widget.compactMode ? 3 : 5,
                 ),
                 decoration: BoxDecoration(
-                  color: Colors.black26,
+                  color: Colors.black38,
                   borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: Colors.white24, width: 0.7),
                 ),
                 child: Text(
-                  widget.compactMode ? '🔄' : 'بطل آخر 🔄',
-                  style: TextStyle(
-                    fontSize: widget.compactMode ? 10 : 10,
+                  widget.compactMode ? '3D 🔄' : 'بطل 3D آخر 🔄',
+                  style: const TextStyle(
+                    fontSize: 9.5,
                     color: Colors.white,
                     fontWeight: FontWeight.bold,
                   ),
@@ -11468,22 +11783,6 @@ class _BrainGamesHubScreenState extends State<BrainGamesHubScreen> {
               '🧠 واحة الـ ١٠٠ مرحلة والأبطال الخارقين',
               style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
             ),
-            actions: [
-              IconButton(
-                tooltip: widget.appState.isAssistantVoiceMuted
-                    ? 'تشغيل صوت المساعد الذكي'
-                    : 'كتم صوت المساعد الذكي',
-                onPressed: () => widget.appState.toggleVoiceAssistant(),
-                icon: Icon(
-                  widget.appState.isAssistantVoiceMuted
-                      ? Icons.volume_off_rounded
-                      : Icons.volume_up_rounded,
-                  color: widget.appState.isAssistantVoiceMuted
-                      ? Colors.redAccent
-                      : const Color(0xFF14B8A6),
-                ),
-              ),
-            ],
           ),
           body: Container(
             decoration: const BoxDecoration(
