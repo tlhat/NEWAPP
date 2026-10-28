@@ -13,9 +13,14 @@ void main() {
       final prefs = await SharedPreferences.getInstance();
       appState = AppStateManager(prefs);
       await appState.initialize();
+      await appState.quickDemoLogin();
       AppNetworkPolicyGuard.isOfflineOnlyModeActive = false;
       AppNetworkPolicyGuard.isExternalVideosAllowed = true;
       AppNetworkPolicyGuard.blockedNetworkRequestsCount = 0;
+    });
+
+    tearDown(() {
+      appState.dispose();
     });
 
     test('1. ParentAccount hashes PIN and password with per-account random salt (never plain text)', () {
