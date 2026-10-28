@@ -3,13 +3,128 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 import 'package:flutter/material.dart';
+import 'package:crypto/crypto.dart' as crypto;
 import 'package:flutter/services.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:speech_to_text/speech_to_text.dart' as stt;
 import 'package:video_player/video_player.dart';
 import 'package:youtube_explode_dart/youtube_explode_dart.dart' as yt_explode;
+
+class LocalCredentialSecurityService {
+  static const int kDefaultPbkdf2Iterations = 12000;
+  static const FlutterSecureStorage _secureStorage = FlutterSecureStorage();
+
+  static String generateRandomSalt([int byteLength = 16]) {
+    final Random rng = Random.secure();
+    final List<int> bytes = List<int>.generate(byteLength, (_) => rng.nextInt(256));
+    return base64Url.encode(bytes);
+  }
+
+  static String deriveKeySha256({
+    required String secret,
+    required String salt,
+    int iterations = kDefaultPbkdf2Iterations,
+  }) {
+    final List<int> secretBytes = utf8.encode(secret.trim());
+    final List<int> saltBytes = utf8.encode(salt);
+    final crypto.Hmac hmac = crypto.Hmac(crypto.sha256, secretBytes);
+    List<int> block = hmac.convert(saltBytes).bytes;
+    List<int> accumulator = List<int>.from(block);
+    for (int i = 1; i < iterations; i++) {
+      block = hmac.convert(block).bytes;
+      for (int j = 0; j < accumulator.length; j++) {
+        accumulator[j] ^= block[j];
+      }
+    }
+    return 'pbkdf2_sha256\$$iterations\$$salt\$${base64Url.encode(accumulator)}';
+  }
+
+  static bool isFormattedHash(String storedValue) {
+    return storedValue.startsWith('pbkdf2_sha256\$');
+  }
+
+  static bool constantTimeEquals(String a, String b) {
+    if (a.length != b.length) return false;
+    int diff = 0;
+    for (int i = 0; i < a.length; i++) {
+      diff |= a.codeUnitAt(i) ^ b.codeUnitAt(i);
+    }
+    return diff == 0;
+  }
+
+  static bool verifySecret({
+    required String inputSecret,
+    required String storedHashOrLegacy,
+    required String fallbackSalt,
+  }) {
+    final String cleanInput = inputSecret.trim();
+    if (cleanInput.isEmpty || storedHashOrLegacy.isEmpty) return false;
+    if (isFormattedHash(storedHashOrLegacy)) {
+      final List<String> parts = storedHashOrLegacy.split('\$');
+      if (parts.length == 4) {
+        final int iters = int.tryParse(parts[1]) ?? kDefaultPbkdf2Iterations;
+        final String salt = parts[2];
+        final String computed = deriveKeySha256(
+          secret: cleanInput,
+          salt: salt,
+          iterations: iters,
+        );
+        return constantTimeEquals(computed, storedHashOrLegacy);
+      }
+    }
+    if (storedHashOrLegacy.startsWith('hpin_')) {
+      int hash = 5381;
+      final String salted = 'haneen_safe_salt_v3_$cleanInput';
+      for (int i = 0; i < salted.length; i++) {
+        hash = ((hash << 5) + hash) ^ salted.codeUnitAt(i);
+      }
+      final String legacyHpin = 'hpin_${(hash & 0x7FFFFFFF).toRadixString(16)}';
+      return constantTimeEquals(legacyHpin, storedHashOrLegacy);
+    }
+    return constantTimeEquals(cleanInput, storedHashOrLegacy);
+  }
+
+  static Future<void> writeSecureValue(String key, String value) async {
+    try {
+      await _secureStorage.write(key: key, value: value);
+    } catch (_) {}
+  }
+
+  static Future<String?> readSecureValue(String key) async {
+    try {
+      return await _secureStorage.read(key: key);
+    } catch (_) {
+      return null;
+    }
+  }
+}
+
+class AppNetworkPolicyGuard {
+  static bool isOfflineOnlyModeActive = false;
+  static bool isExternalVideosAllowed = true;
+  static int blockedNetworkRequestsCount = 0;
+
+  static bool canPerformOutboundNetworkRequest({bool isVideoImportOrStream = false}) {
+    if (isOfflineOnlyModeActive) {
+      blockedNetworkRequestsCount++;
+      return false;
+    }
+    if (isVideoImportOrStream && !isExternalVideosAllowed) {
+      blockedNetworkRequestsCount++;
+      return false;
+    }
+    return true;
+  }
+
+  static bool isSecureHttpsOrLocalFile(String rawUrl) {
+    final String trimmed = rawUrl.trim().toLowerCase();
+    if (trimmed.startsWith('/') || trimmed.startsWith('file://')) return true;
+    return trimmed.startsWith('https://');
+  }
+}
 
 const String kDefaultRemoteFeedUrl = '';
 
@@ -33,6 +148,14 @@ class CalmVoiceService {
   bool _sttReady = false;
   bool isSpeaking = false;
   bool isAssistantMuted = false;
+  bool isChildMicrophoneAllowed = true;
+
+  Future<void> setChildMicrophoneAllowed(bool allowed) async {
+    isChildMicrophoneAllowed = allowed;
+    if (!allowed) {
+      await stopListening();
+    }
+  }
 
   Future<void> setAssistantMuted(bool muted) async {
     isAssistantMuted = muted;
@@ -105,21 +228,46 @@ class CalmVoiceService {
     }
   }
 
-  Future<void> startListening({
+  Future<bool> startListening({
     required void Function(String recognizedWords) onResult,
+    void Function(String errorReason)? onPermissionOrPolicyDenied,
   }) async {
-    final bool available = await initSpeechRecognition();
-    if (!available) return;
-    await stopSpeaking();
-    await _speech.listen(
-      localeId: 'ar_EG',
-      listenFor: const Duration(seconds: 8),
-      pauseFor: const Duration(seconds: 3),
-      partialResults: true,
-      onResult: (result) {
-        onResult(result.recognizedWords);
-      },
-    );
+    if (!isChildMicrophoneAllowed) {
+      await stopListening();
+      onPermissionOrPolicyDenied?.call(
+        'تم إيقاف الميكروفون بناءً على إعدادات الرقابة الأبوية لهذا الطفل.',
+      );
+      return false;
+    }
+    try {
+      final bool available = await initSpeechRecognition();
+      if (!available) {
+        onPermissionOrPolicyDenied?.call(
+          'خدمة التعرف على الكلام أو صلاحية الميكروفون في النظام غير متاحة حالياً؛ يمكنك الاستماع للنطق الهادئ والترديد الحر.',
+        );
+        return false;
+      }
+      await stopSpeaking();
+      await _speech.listen(
+        localeId: 'ar_EG',
+        listenFor: const Duration(seconds: 8),
+        pauseFor: const Duration(seconds: 3),
+        partialResults: true,
+        onResult: (result) {
+          if (!isChildMicrophoneAllowed) {
+            stopListening();
+            return;
+          }
+          onResult(result.recognizedWords);
+        },
+      );
+      return true;
+    } catch (_) {
+      onPermissionOrPolicyDenied?.call(
+        'تعذر فتح الميكروفون (تأكد من منح إذن الميكروفون للتطبيق في إعدادات أندرويد).',
+      );
+      return false;
+    }
   }
 
   Future<void> stopListening() async {
@@ -327,6 +475,10 @@ class SmartVideoLinkAutoImporter {
 
   static Future<String> _resolveRedirectUrlIfNeeded(String rawUrl) async {
     String currentUrl = rawUrl.trim();
+    if (!AppNetworkPolicyGuard.canPerformOutboundNetworkRequest(
+        isVideoImportOrStream: true)) {
+      return currentUrl;
+    }
     if (currentUrl.startsWith('@') && !currentUrl.contains('/')) {
       return 'https://www.tiktok.com/$currentUrl';
     }
@@ -457,21 +609,37 @@ class SmartVideoLinkAutoImporter {
 
   static Future<ImportedVideoSourceMetadata> fetchHighDefStreamAndExactMetadata(
       String rawUrl) async {
-    final String trimmed = await _resolveRedirectUrlIfNeeded(rawUrl.trim());
+    final String rawTrimmed = rawUrl.trim();
 
-    if (trimmed.startsWith('/') || trimmed.startsWith('file://')) {
-      final String fileName = trimmed.split('/').last.replaceAll('.mp4', '');
+    if (rawTrimmed.startsWith('/') || rawTrimmed.startsWith('file://')) {
+      final String fileName =
+          rawTrimmed.split('/').last.replaceAll('.mp4', '');
       return ImportedVideoSourceMetadata(
         title: fileName.isNotEmpty ? fileName : 'فيديو محلي عالي الدقة',
         originalDescription:
             'فيديو محلي بأعلى جودة أصلية من ذاكرة الجهاز ($fileName).',
-        hdStreamUrl: trimmed,
-        sourceRawUrl: trimmed,
+        hdStreamUrl: rawTrimmed,
+        sourceRawUrl: rawTrimmed,
         qualityBadge: 'Original 1080p HD',
         isVerticalSource: true,
         resolvedRealStream: true,
       );
     }
+
+    if (!AppNetworkPolicyGuard.canPerformOutboundNetworkRequest(
+        isVideoImportOrStream: true)) {
+      return ImportedVideoSourceMetadata(
+        title: null,
+        originalDescription: null,
+        hdStreamUrl: null,
+        sourceRawUrl: rawTrimmed,
+        qualityBadge: 'Offline Blocked',
+        isVerticalSource: true,
+        resolvedRealStream: false,
+      );
+    }
+
+    final String trimmed = await _resolveRedirectUrlIfNeeded(rawTrimmed);
 
     if (trimmed.contains('drive.google.com/file/d/')) {
       final RegExp driveRegex =
@@ -961,6 +1129,13 @@ class SmartVideoLinkAutoImporter {
     String? preFetchedDescription,
   }) async {
     final String cleanUrl = rawUrl.trim();
+    final bool isLocalFile =
+        cleanUrl.startsWith('/') || cleanUrl.startsWith('file://');
+    if (!isLocalFile &&
+        !AppNetworkPolicyGuard.canPerformOutboundNetworkRequest(
+            isVideoImportOrStream: true)) {
+      return null;
+    }
     final ImportedVideoSourceMetadata fetchedMeta =
         await fetchHighDefStreamAndExactMetadata(cleanUrl);
 
@@ -1253,6 +1428,10 @@ class SmartVideoLinkAutoImporter {
     String rawUrl, {
     int maxVideosToImport = 8,
   }) async {
+    if (!AppNetworkPolicyGuard.canPerformOutboundNetworkRequest(
+        isVideoImportOrStream: true)) {
+      return [];
+    }
     final String trimmed = await _resolveRedirectUrlIfNeeded(rawUrl.trim());
     final List<VideoModel> importedList = [];
 
@@ -1729,6 +1908,7 @@ class ChildProfile {
   final String id;
   String name;
   String age;
+  String educationLevel;
   int dailyTimeLimit;
   int starsEarned;
   String chosenAvatar;
@@ -1741,7 +1921,16 @@ class ChildProfile {
   String remoteLockReasonMessage;
   String currentLiveStatus;
   String familyPairingCode;
+  bool allowMicrophone;
+  bool allowExternalVideos;
+  bool offlineOnlyMode;
   List<String> completedActivities;
+  List<String> completedLessons;
+  Map<String, String> unlockedAchievements;
+  List<String> unlockedCosmetics;
+  List<String> favoriteStoryIds;
+  List<String> practicedVocabulary;
+  Map<String, int> gameProgressByGameId;
   List<String> likedVideoIds;
   List<ChildActivityLogEntry> liveActivityTimeline;
 
@@ -1749,6 +1938,7 @@ class ChildProfile {
     required this.id,
     required this.name,
     required this.age,
+    this.educationLevel = 'مبتدئ',
     required this.dailyTimeLimit,
     this.starsEarned = 0,
     required this.chosenAvatar,
@@ -1760,28 +1950,56 @@ class ChildProfile {
     this.isDeviceRemotelyLocked = false,
     this.remoteLockReasonMessage =
         'تم قفل شاشة التطبيق الآن من هاتف ولي الأمر. حان وقت الراحة أو اللعب الواقعي يا بطل!',
-    this.currentLiveStatus = 'متصل — يتصفح قصص حنين الهادئة',
+    this.currentLiveStatus = 'متصل — يتصفح أكاديمية وقصص حنين',
     this.familyPairingCode = 'HK-8824',
+    this.allowMicrophone = true,
+    this.allowExternalVideos = true,
+    this.offlineOnlyMode = false,
     List<String>? completedActivities,
+    List<String>? completedLessons,
+    Map<String, String>? unlockedAchievements,
+    List<String>? unlockedCosmetics,
+    List<String>? favoriteStoryIds,
+    List<String>? practicedVocabulary,
+    Map<String, int>? gameProgressByGameId,
     List<String>? likedVideoIds,
     List<ChildActivityLogEntry>? liveActivityTimeline,
   })  : completedActivities = completedActivities ?? [],
+        completedLessons = completedLessons ?? [],
+        unlockedAchievements = unlockedAchievements ?? {},
+        unlockedCosmetics = unlockedCosmetics ?? ['hero_crown_basic'],
+        favoriteStoryIds = favoriteStoryIds ?? [],
+        practicedVocabulary = practicedVocabulary ?? [],
+        gameProgressByGameId = gameProgressByGameId ?? {},
         likedVideoIds = likedVideoIds ?? [],
         liveActivityTimeline = liveActivityTimeline ??
             [
               ChildActivityLogEntry(
                 timestampIso: DateTime.now().toIso8601String(),
-                actionTitle: 'بدأ جلسة المشاهدة الهادئة على التطبيق',
+                actionTitle: 'بدأ جلسة التعلم الآمنة على منصة حنين',
                 categoryBadge: 'جلسة مباشرة',
               ),
             ];
 
   factory ChildProfile.fromJson(Map<String, dynamic> json) {
+    final Map<String, String> parsedAchievements = {};
+    if (json['unlockedAchievements'] is Map) {
+      (json['unlockedAchievements'] as Map).forEach((k, v) {
+        parsedAchievements[k.toString()] = v.toString();
+      });
+    }
+    final Map<String, int> parsedGameProgress = {};
+    if (json['gameProgressByGameId'] is Map) {
+      (json['gameProgressByGameId'] as Map).forEach((k, v) {
+        parsedGameProgress[k.toString()] = int.tryParse(v.toString()) ?? 0;
+      });
+    }
     return ChildProfile(
       id: (json['id'] ?? 'child_${DateTime.now().millisecondsSinceEpoch}')
           .toString(),
       name: (json['name'] ?? 'فارس').toString(),
       age: (json['age'] ?? json['ageGroup'] ?? '3–6 سنوات').toString(),
+      educationLevel: (json['educationLevel'] ?? 'مبتدئ').toString(),
       dailyTimeLimit: int.tryParse(
               (json['dailyTimeLimit'] ?? json['dailyQuota'] ?? '20')
                   .toString()) ??
@@ -1809,13 +2027,34 @@ class ChildProfile {
               'تم قفل شاشة التطبيق الآن من هاتف ولي الأمر. حان وقت الراحة يا بطل!')
           .toString(),
       currentLiveStatus:
-          (json['currentLiveStatus'] ?? 'متصل — يشاهد القصص الهادئة')
+          (json['currentLiveStatus'] ?? 'متصل — يتعلم في أكاديمية حنين')
               .toString(),
       familyPairingCode: (json['familyPairingCode'] ?? 'HK-8824').toString(),
+      allowMicrophone: json['allowMicrophone'] != false,
+      allowExternalVideos: json['allowExternalVideos'] != false,
+      offlineOnlyMode: json['offlineOnlyMode'] == true,
       completedActivities: (json['completedActivities'] as List<dynamic>?)
               ?.map((e) => e.toString())
               .toList() ??
           [],
+      completedLessons: (json['completedLessons'] as List<dynamic>?)
+              ?.map((e) => e.toString())
+              .toList() ??
+          [],
+      unlockedAchievements: parsedAchievements,
+      unlockedCosmetics: (json['unlockedCosmetics'] as List<dynamic>?)
+              ?.map((e) => e.toString())
+              .toList() ??
+          ['hero_crown_basic'],
+      favoriteStoryIds: (json['favoriteStoryIds'] as List<dynamic>?)
+              ?.map((e) => e.toString())
+              .toList() ??
+          [],
+      practicedVocabulary: (json['practicedVocabulary'] as List<dynamic>?)
+              ?.map((e) => e.toString())
+              .toList() ??
+          [],
+      gameProgressByGameId: parsedGameProgress,
       likedVideoIds: (json['likedVideoIds'] as List<dynamic>?)
               ?.map((e) => e.toString())
               .toList() ??
@@ -1833,6 +2072,7 @@ class ChildProfile {
       'id': id,
       'name': name,
       'age': age,
+      'educationLevel': educationLevel,
       'dailyTimeLimit': dailyTimeLimit,
       'starsEarned': starsEarned,
       'chosenAvatar': chosenAvatar,
@@ -1845,7 +2085,16 @@ class ChildProfile {
       'remoteLockReasonMessage': remoteLockReasonMessage,
       'currentLiveStatus': currentLiveStatus,
       'familyPairingCode': familyPairingCode,
+      'allowMicrophone': allowMicrophone,
+      'allowExternalVideos': allowExternalVideos,
+      'offlineOnlyMode': offlineOnlyMode,
       'completedActivities': completedActivities,
+      'completedLessons': completedLessons,
+      'unlockedAchievements': unlockedAchievements,
+      'unlockedCosmetics': unlockedCosmetics,
+      'favoriteStoryIds': favoriteStoryIds,
+      'practicedVocabulary': practicedVocabulary,
+      'gameProgressByGameId': gameProgressByGameId,
       'likedVideoIds': likedVideoIds,
       'liveActivityTimeline':
           liveActivityTimeline.map((e) => e.toJson()).toList(),
@@ -2242,8 +2491,9 @@ class ParentEmailAlertItem {
 class ParentAccount {
   String fullName;
   String emailOrPhone;
-  String password;
-  String parentalPin;
+  String credentialSalt;
+  String passwordHash;
+  String pinHash;
   String authProvider;
   bool warmEveningFilter;
   bool emailNotificationsEnabled;
@@ -2260,8 +2510,11 @@ class ParentAccount {
   ParentAccount({
     required this.fullName,
     required this.emailOrPhone,
-    required this.password,
-    this.parentalPin = '1234',
+    String? credentialSalt,
+    String? passwordHash,
+    String? password,
+    String? pinHash,
+    String? parentalPin,
     this.authProvider = 'email',
     this.warmEveningFilter = false,
     this.emailNotificationsEnabled = true,
@@ -2274,11 +2527,83 @@ class ParentAccount {
     required this.activeChildId,
     List<PaymentTransactionRecord>? paymentHistory,
     List<ParentEmailAlertItem>? emailAlertsLog,
-  })  : trialStartDate = trialStartDate ?? DateTime.now(),
+  })  : credentialSalt = credentialSalt ??
+            LocalCredentialSecurityService.generateRandomSalt(),
+        passwordHash = _initSecretHash(
+          rawOrHash: passwordHash ?? password ?? '',
+          salt: credentialSalt ??
+              LocalCredentialSecurityService.generateRandomSalt(),
+        ),
+        pinHash = _initSecretHash(
+          rawOrHash: pinHash ?? parentalPin ?? '1234',
+          salt: credentialSalt ??
+              LocalCredentialSecurityService.generateRandomSalt(),
+        ),
+        trialStartDate = trialStartDate ?? DateTime.now(),
         subscriptionExpiryDate = subscriptionExpiryDate ??
             DateTime.now().add(const Duration(hours: 24)),
         paymentHistory = paymentHistory ?? [],
         emailAlertsLog = emailAlertsLog ?? [];
+
+  static String _initSecretHash({
+    required String rawOrHash,
+    required String salt,
+  }) {
+    final String trimmed = rawOrHash.trim();
+    if (trimmed.isEmpty) return '';
+    if (LocalCredentialSecurityService.isFormattedHash(trimmed)) {
+      return trimmed;
+    }
+    return LocalCredentialSecurityService.deriveKeySha256(
+      secret: trimmed,
+      salt: salt,
+    );
+  }
+
+  bool verifyPassword(String enteredPassword) {
+    final bool ok = LocalCredentialSecurityService.verifySecret(
+      inputSecret: enteredPassword,
+      storedHashOrLegacy: passwordHash,
+      fallbackSalt: credentialSalt,
+    );
+    if (ok && !LocalCredentialSecurityService.isFormattedHash(passwordHash)) {
+      passwordHash = LocalCredentialSecurityService.deriveKeySha256(
+        secret: enteredPassword.trim(),
+        salt: credentialSalt,
+      );
+    }
+    return ok;
+  }
+
+  void setNewPassword(String newRawPassword) {
+    credentialSalt = LocalCredentialSecurityService.generateRandomSalt();
+    passwordHash = LocalCredentialSecurityService.deriveKeySha256(
+      secret: newRawPassword.trim(),
+      salt: credentialSalt,
+    );
+  }
+
+  bool verifyParentalPin(String enteredPin) {
+    final bool ok = LocalCredentialSecurityService.verifySecret(
+      inputSecret: enteredPin,
+      storedHashOrLegacy: pinHash,
+      fallbackSalt: credentialSalt,
+    );
+    if (ok && !LocalCredentialSecurityService.isFormattedHash(pinHash)) {
+      pinHash = LocalCredentialSecurityService.deriveKeySha256(
+        secret: enteredPin.trim(),
+        salt: credentialSalt,
+      );
+    }
+    return ok;
+  }
+
+  void setNewParentalPin(String newRawPin) {
+    pinHash = LocalCredentialSecurityService.deriveKeySha256(
+      secret: newRawPin.trim(),
+      salt: credentialSalt,
+    );
+  }
 
   ChildProfile get activeChild {
     if (children.isEmpty) {
@@ -2359,11 +2684,21 @@ class ParentAccount {
         DateTime.tryParse(json['subscriptionExpiryDate']?.toString() ?? '') ??
             parsedTrialStart.add(const Duration(hours: 24));
 
+    final String salt = (json['credentialSalt'] ?? '').toString().trim().isNotEmpty
+        ? json['credentialSalt'].toString().trim()
+        : LocalCredentialSecurityService.generateRandomSalt();
+
+    final String rawOrHashedPassword =
+        (json['passwordHash'] ?? json['password'] ?? '').toString();
+    final String rawOrHashedPin =
+        (json['pinHash'] ?? json['parentalPin'] ?? '1234').toString();
+
     return ParentAccount(
       fullName: (json['fullName'] ?? 'ولي الأمر').toString(),
       emailOrPhone: (json['emailOrPhone'] ?? '').toString(),
-      password: (json['password'] ?? '').toString(),
-      parentalPin: (json['parentalPin'] ?? '1234').toString(),
+      credentialSalt: salt,
+      passwordHash: _initSecretHash(rawOrHash: rawOrHashedPassword, salt: salt),
+      pinHash: _initSecretHash(rawOrHash: rawOrHashedPin, salt: salt),
       authProvider: (json['authProvider'] ?? 'email').toString(),
       warmEveningFilter:
           json['warmEveningFilter'] == true || json['bedtimeDimming'] == true,
@@ -2387,8 +2722,9 @@ class ParentAccount {
     return {
       'fullName': fullName,
       'emailOrPhone': emailOrPhone,
-      'password': password,
-      'parentalPin': parentalPin,
+      'credentialSalt': credentialSalt,
+      'passwordHash': passwordHash,
+      'pinHash': pinHash,
       'authProvider': authProvider,
       'warmEveningFilter': warmEveningFilter,
       'emailNotificationsEnabled': emailNotificationsEnabled,
@@ -2404,15 +2740,6 @@ class ParentAccount {
     };
   }
 }
-
-const List<Map<String, String>> kVideoCategories = [
-  {'id': 'all', 'title': 'كل القصص', 'icon': '✨'},
-  {'id': 'bedtime', 'title': 'قصص النوم', 'icon': '🌙'},
-  {'id': 'habits', 'title': 'سلوكياتي', 'icon': '🧸'},
-  {'id': 'arabic', 'title': 'فصاحة ونطق', 'icon': '🗣️'},
-  {'id': 'science', 'title': 'لماذا وكيف؟', 'icon': '🦋'},
-  {'id': 'crafts', 'title': 'افعلها بيدك', 'icon': '🎨'},
-];
 
 List<VideoModel> getDefaultVideos() {
   return [
@@ -2529,8 +2856,17 @@ class AppStateManager extends ChangeNotifier {
 
   Timer? _screenTimeTimer;
   int _activeSessionSeconds = 0;
+  final Set<String> _inFlightRewardLocks = {};
 
   AppStateManager(this._prefs);
+
+  void _syncActiveChildPoliciesToRuntime() {
+    final child = currentAccount?.activeChild;
+    if (child == null) return;
+    AppNetworkPolicyGuard.isOfflineOnlyModeActive = child.offlineOnlyMode;
+    AppNetworkPolicyGuard.isExternalVideosAllowed = child.allowExternalVideos;
+    CalmVoiceService.instance.setChildMicrophoneAllowed(child.allowMicrophone);
+  }
 
   Future<void> initialize() async {
     await CalmVoiceService.instance.init();
@@ -2540,7 +2876,13 @@ class AppStateManager extends ChangeNotifier {
     authApiUrl = _prefs.getString('auth_api_url') ?? '';
     emailWebhookUrl = _prefs.getString('email_webhook_url') ?? '';
     paymentVerifyApiUrl = _prefs.getString('payment_verify_api_url') ?? '';
-    merchantSecretKey = _prefs.getString('merchant_secret_key') ?? '';
+    merchantSecretKey = await LocalCredentialSecurityService.readSecureValue(
+            'merchant_secret_key_secure') ??
+        _prefs.getString('merchant_secret_key') ??
+        '';
+    if (_prefs.containsKey('merchant_secret_key')) {
+      await _prefs.remove('merchant_secret_key');
+    }
     remoteMonitorApiUrl = _prefs.getString('remote_monitor_api_url') ?? '';
 
     final String? accountsJson = _prefs.getString('registered_accounts_v2');
@@ -2770,7 +3112,8 @@ class AppStateManager extends ChangeNotifier {
 
     account.emailAlertsLog.insert(0, alert);
 
-    if (emailWebhookUrl.trim().isNotEmpty) {
+    if (emailWebhookUrl.trim().isNotEmpty &&
+        AppNetworkPolicyGuard.canPerformOutboundNetworkRequest()) {
       try {
         await http
             .post(
@@ -2812,6 +3155,7 @@ class AppStateManager extends ChangeNotifier {
     for (final video in videos) {
       video.isLiked = child.likedVideoIds.contains(video.id);
     }
+    _syncActiveChildPoliciesToRuntime();
   }
 
   Future<String?> login(String emailOrPhone, String password) async {
@@ -2820,7 +3164,8 @@ class AppStateManager extends ChangeNotifier {
       return 'يرجى إدخال البريد الإلكتروني أو رقم الهاتف وكلمة المرور';
     }
 
-    if (authApiUrl.trim().isNotEmpty) {
+    if (authApiUrl.trim().isNotEmpty &&
+        AppNetworkPolicyGuard.canPerformOutboundNetworkRequest()) {
       try {
         final response = await http
             .post(
@@ -2853,9 +3198,10 @@ class AppStateManager extends ChangeNotifier {
     if (account == null) {
       return 'لا يوجد حساب مسجل بهذا البريد أو الهاتف. أنشئ حساباً جديداً أو سجل بحساب جوجل.';
     }
-    if (account.password != password && account.authProvider != 'google') {
+    if (!account.verifyPassword(password) && account.authProvider != 'google') {
       return 'كلمة المرور غير صحيحة، يرجى المحاولة مرة أخرى.';
     }
+    await _saveAccounts();
 
     currentAccount = account;
     hasSelectedChildInSession = true;
@@ -3025,7 +3371,9 @@ class AppStateManager extends ChangeNotifier {
     paymentVerifyApiUrl = verifyUrl.trim();
     merchantSecretKey = secretKey.trim();
     await _prefs.setString('payment_verify_api_url', paymentVerifyApiUrl);
-    await _prefs.setString('merchant_secret_key', merchantSecretKey);
+    await LocalCredentialSecurityService.writeSecureValue(
+        'merchant_secret_key_secure', merchantSecretKey);
+    await _prefs.remove('merchant_secret_key');
     notifyListeners();
   }
 
@@ -3115,7 +3463,8 @@ class AppStateManager extends ChangeNotifier {
       );
     }
 
-    if (paymentVerifyApiUrl.trim().isNotEmpty) {
+    if (paymentVerifyApiUrl.trim().isNotEmpty &&
+        AppNetworkPolicyGuard.canPerformOutboundNetworkRequest()) {
       try {
         final response = await http
             .post(
@@ -3232,13 +3581,13 @@ class AppStateManager extends ChangeNotifier {
     if (account == null) {
       return 'لم يتم العثور على حساب مرتبط بهذا البريد أو رقم الهاتف.';
     }
-    if (account.parentalPin != parentalPin.trim()) {
+    if (!account.verifyParentalPin(parentalPin)) {
       return 'رمز الحماية الأبوي (PIN) غير مطابق لهذا الحساب.';
     }
     if (newPassword.length < 4) {
       return 'كلمة المرور الجديدة يجب أن تكون 4 أحرف أو أرقام على الأقل.';
     }
-    account.password = newPassword;
+    account.setNewPassword(newPassword);
     await _saveAccounts();
     notifyListeners();
     return null;
@@ -3246,7 +3595,7 @@ class AppStateManager extends ChangeNotifier {
 
   Future<void> updateParentalPin(String newPin) async {
     if (currentAccount == null || newPin.trim().length != 4) return;
-    currentAccount!.parentalPin = newPin.trim();
+    currentAccount!.setNewParentalPin(newPin.trim());
     await _saveAccounts();
     notifyListeners();
   }
@@ -3296,7 +3645,7 @@ class AppStateManager extends ChangeNotifier {
     if (child.liveActivityTimeline.length > 35) {
       child.liveActivityTimeline.removeLast();
     }
-    if (remoteMonitorApiUrl.trim().isNotEmpty) {
+    if (remoteMonitorApiUrl.trim().isNotEmpty && AppNetworkPolicyGuard.canPerformOutboundNetworkRequest()) {
       try {
         http.post(
           Uri.parse(remoteMonitorApiUrl.trim()),
@@ -3348,7 +3697,7 @@ class AppStateManager extends ChangeNotifier {
     if (lockDevice) {
       await CalmVoiceService.instance.stopSpeaking();
     }
-    if (remoteMonitorApiUrl.trim().isNotEmpty) {
+    if (remoteMonitorApiUrl.trim().isNotEmpty && AppNetworkPolicyGuard.canPerformOutboundNetworkRequest()) {
       try {
         await http
             .post(
@@ -3531,68 +3880,342 @@ class AppStateManager extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> recordBrainGameWin({
+  Future<bool> recordBrainGameWin({
     required String gameId,
     required String gameTitle,
     int earnedIqPoints = 15,
     int earnedStars = 2,
+    String? learnedWord,
   }) async {
-    if (currentAccount == null) return;
+    if (currentAccount == null) return false;
     final child = currentAccount!.activeChild;
-    child.starsEarned += earnedStars;
-    child.intelligencePoints += earnedIqPoints;
-    child.gamesCompletedCount++;
-    final String key = 'game_${gameId}_${DateTime.now().millisecondsSinceEpoch}';
-    child.completedActivities.add(key);
-    child.currentLiveStatus = '🧠 يلعب ويتفوق في: «$gameTitle»';
+    final String uniqueKey = '${child.id}_game_win_$gameId';
+    if (_inFlightRewardLocks.contains(uniqueKey)) return false;
+    _inFlightRewardLocks.add(uniqueKey);
+
+    try {
+      final bool alreadyRewarded =
+          child.completedActivities.contains(uniqueKey) ||
+              child.completedActivities.contains('game_win_$gameId');
+
+      if (learnedWord != null &&
+          learnedWord.trim().isNotEmpty &&
+          !child.practicedVocabulary.contains(learnedWord.trim())) {
+        child.practicedVocabulary.add(learnedWord.trim());
+      }
+
+      final RegExp trailingLevel = RegExp(r'_(\d+)$');
+      final m = trailingLevel.firstMatch(gameId);
+      if (m != null) {
+        final String baseGame = gameId.substring(0, m.start);
+        final int lvl = int.tryParse(m.group(1)!) ?? 1;
+        final int prevMax = child.gameProgressByGameId[baseGame] ?? 0;
+        if (lvl > prevMax) {
+          child.gameProgressByGameId[baseGame] = lvl;
+        }
+      }
+
+      if (!alreadyRewarded) {
+        child.completedActivities.add(uniqueKey);
+        child.starsEarned += earnedStars;
+        child.intelligencePoints += earnedIqPoints;
+        child.gamesCompletedCount++;
+        _evaluateAndUnlockChildAchievements(child);
+      }
+
+      child.currentLiveStatus = '🧠 يلعب ويتفوق في: «$gameTitle»';
+      child.liveActivityTimeline.insert(
+        0,
+        ChildActivityLogEntry(
+          timestampIso: DateTime.now().toIso8601String(),
+          actionTitle: alreadyRewarded
+              ? 'أعاد التدريب بنجاح في ($gameTitle) بدون تكرار النجوم'
+              : 'أنجز تحدياً جديداً في ($gameTitle) وكسب +$earnedStars نجمة',
+          categoryBadge: 'ألعاب الذكاء',
+        ),
+      );
+
+      if (!alreadyRewarded &&
+          currentAccount!.emailNotificationsEnabled &&
+          child.gamesCompletedCount % 2 == 0) {
+        await sendParentEmailAlert(
+          subject:
+              '🧠 تطور قدرات الذكاء للطفل ${child.name} في «$gameTitle»!',
+          bodyMessage:
+              'أنجز ${child.name} تحدياً جديداً في لعبة ($gameTitle) وارتفعت نقاط الذكاء والقدرات لديه إلى ${child.intelligencePoints} نقطة مع ${child.starsEarned} نجمة!',
+          customSuggestion:
+              '💡 اقتراح تربوي: شجع ${child.name} على التنوع بين ألعاب الذاكرة البصرية والمنطق والحساب.',
+        );
+      }
+      await _saveAccounts();
+      notifyListeners();
+      return !alreadyRewarded;
+    } finally {
+      _inFlightRewardLocks.remove(uniqueKey);
+    }
+  }
+
+  void _evaluateAndUnlockChildAchievements(ChildProfile child) {
+    final String nowIso = DateTime.now().toIso8601String();
+    if (child.completedLessons.isNotEmpty &&
+        !child.unlockedAchievements.containsKey('first_lesson')) {
+      child.unlockedAchievements['first_lesson'] = nowIso;
+    }
+    if (child.completedLessons.length >= 5 &&
+        !child.unlockedAchievements.containsKey('five_lessons')) {
+      child.unlockedAchievements['five_lessons'] = nowIso;
+    }
+    if (child.practicedVocabulary.length >= 5 &&
+        !child.unlockedAchievements.containsKey('vocab_explorer')) {
+      child.unlockedAchievements['vocab_explorer'] = nowIso;
+    }
+    if (child.gamesCompletedCount >= 5 &&
+        !child.unlockedAchievements.containsKey('games_champion')) {
+      child.unlockedAchievements['games_champion'] = nowIso;
+    }
+    if (child.starsEarned >= 15 &&
+        !child.unlockedAchievements.containsKey('star_collector_15')) {
+      child.unlockedAchievements['star_collector_15'] = nowIso;
+    }
+    if (child.correctPronunciationsCount >= 3 &&
+        !child.unlockedAchievements.containsKey('clear_speaker')) {
+      child.unlockedAchievements['clear_speaker'] = nowIso;
+    }
+  }
+
+  Future<bool> completeAcademyLesson({
+    required String lessonId,
+    required String lessonTitle,
+    required String learnedWord,
+    int rewardStars = 2,
+  }) async {
+    if (currentAccount == null) return false;
+    final child = currentAccount!.activeChild;
+    final String lockKey = '${child.id}_lesson_$lessonId';
+    if (_inFlightRewardLocks.contains(lockKey)) return false;
+    _inFlightRewardLocks.add(lockKey);
+
+    try {
+      final bool isNew = !child.completedLessons.contains(lessonId);
+      if (isNew) {
+        child.completedLessons.add(lessonId);
+        child.starsEarned += rewardStars;
+        child.intelligencePoints += 15;
+      }
+      if (learnedWord.trim().isNotEmpty &&
+          !child.practicedVocabulary.contains(learnedWord.trim())) {
+        child.practicedVocabulary.add(learnedWord.trim());
+      }
+      _evaluateAndUnlockChildAchievements(child);
+      child.currentLiveStatus = '🎓 أكمل درساً في أكاديمية حنين: «$lessonTitle»';
+      child.liveActivityTimeline.insert(
+        0,
+        ChildActivityLogEntry(
+          timestampIso: DateTime.now().toIso8601String(),
+          actionTitle: isNew
+              ? 'أتم درس «$lessonTitle» في أكاديمية حنين (+$rewardStars نجمة)'
+              : 'راجع درس «$lessonTitle» في أكاديمية حنين بدون تكرار النجوم',
+          categoryBadge: 'أكاديمية حنين',
+        ),
+      );
+      await _saveAccounts();
+      notifyListeners();
+      return isNew;
+    } finally {
+      _inFlightRewardLocks.remove(lockKey);
+    }
+  }
+
+  Future<bool> unlockChildCosmeticWithStars({
+    required String cosmeticId,
+    required String cosmeticTitle,
+    required int starCost,
+  }) async {
+    if (currentAccount == null) return false;
+    final child = currentAccount!.activeChild;
+    if (child.unlockedCosmetics.contains(cosmeticId)) return true;
+    if (child.starsEarned < starCost) return false;
+    child.starsEarned -= starCost;
+    child.unlockedCosmetics.add(cosmeticId);
     child.liveActivityTimeline.insert(
       0,
       ChildActivityLogEntry(
         timestampIso: DateTime.now().toIso8601String(),
-        actionTitle: 'أنجز تحدياً في ($gameTitle) وكسب +$earnedIqPoints نقطة ذكاء',
-        categoryBadge: 'ألعاب الذكاء',
+        actionTitle: 'فتح مكافأة جديدة بنجومه: «$cosmeticTitle»',
+        categoryBadge: 'عالم المكافآت',
       ),
     );
+    await _saveAccounts();
+    notifyListeners();
+    return true;
+  }
 
-    if (currentAccount!.emailNotificationsEnabled &&
-        child.gamesCompletedCount % 2 == 0) {
-      await sendParentEmailAlert(
-        subject:
-            '🧠 تطور قدرات الذكاء للطفل ${child.name} في «$gameTitle»!',
-        bodyMessage:
-            'أنجز ${child.name} تحدياً جديداً في لعبة ($gameTitle) وارتفعت نقاط الذكاء والقدرات لديه إلى ${child.intelligencePoints} نقطة مع ${child.starsEarned} نجمة!',
-        customSuggestion:
-            '💡 اقتراح تربوي: شجع ${child.name} على التنوع بين ألعاب الذاكرة البصرية والمنطق والحساب لتنمية نصفي الدماغ معاً.',
-      );
+  Future<void> toggleFavoriteInteractiveStory(String storyId) async {
+    if (currentAccount == null) return;
+    final child = currentAccount!.activeChild;
+    if (child.favoriteStoryIds.contains(storyId)) {
+      child.favoriteStoryIds.remove(storyId);
+    } else {
+      child.favoriteStoryIds.add(storyId);
     }
     await _saveAccounts();
     notifyListeners();
   }
 
-  Future<void> awardStarAndRecordActivity(
-    String activityKey, {
-    bool isPronunciation = false,
+  Future<void> updateChildPrivacyAndSafetyControls({
+    required String childId,
+    String? educationLevel,
+    bool? allowMicrophone,
+    bool? allowExternalVideos,
+    bool? offlineOnlyMode,
   }) async {
     if (currentAccount == null) return;
-    final child = currentAccount!.activeChild;
-    child.starsEarned++;
-    if (isPronunciation) {
-      child.correctPronunciationsCount++;
+    final idx = currentAccount!.children.indexWhere((c) => c.id == childId);
+    if (idx == -1) return;
+    final child = currentAccount!.children[idx];
+    if (educationLevel != null) child.educationLevel = educationLevel;
+    if (allowMicrophone != null) {
+      child.allowMicrophone = allowMicrophone;
+      if (child.id == currentAccount!.activeChildId) {
+        await CalmVoiceService.instance
+            .setChildMicrophoneAllowed(allowMicrophone);
+      }
     }
-    if (!child.completedActivities.contains(activityKey)) {
-      child.completedActivities.add(activityKey);
+    if (allowExternalVideos != null) {
+      child.allowExternalVideos = allowExternalVideos;
+      if (child.id == currentAccount!.activeChildId) {
+        AppNetworkPolicyGuard.isExternalVideosAllowed = allowExternalVideos;
+      }
     }
-    if (currentAccount!.emailNotificationsEnabled &&
-        child.starsEarned % 3 == 0) {
-      await sendParentEmailAlert(
-        subject:
-            '🌟 إنجاز جديد للبطل ${child.name} — وصل إلى ${child.starsEarned} نجوم!',
-        bodyMessage:
-            'أحرز ${child.name} تقدماً رائعاً في الفصاحة والأنشطة التربوية وجمع الآن ${child.starsEarned} نجوم.',
-      );
+    if (offlineOnlyMode != null) {
+      child.offlineOnlyMode = offlineOnlyMode;
+      if (child.id == currentAccount!.activeChildId) {
+        AppNetworkPolicyGuard.isOfflineOnlyModeActive = offlineOnlyMode;
+      }
     }
     await _saveAccounts();
     notifyListeners();
+  }
+
+  Future<void> clearChildActivityHistoryOnly(String childId) async {
+    if (currentAccount == null) return;
+    final idx = currentAccount!.children.indexWhere((c) => c.id == childId);
+    if (idx == -1) return;
+    final child = currentAccount!.children[idx];
+    child.usedMinutesToday = 0;
+    child.watchedVideosToday = 0;
+    child.currentLiveStatus = 'متصل — تم مسح سجل النشاط الزمني فقط';
+    child.liveActivityTimeline = [
+      ChildActivityLogEntry(
+        timestampIso: DateTime.now().toIso8601String(),
+        actionTitle:
+            'تم مسح سجل النشاط الزمني فقط مع الاحتفاظ بالدروس والنجوم والأوسمة',
+        categoryBadge: 'سجل النشاط',
+      ),
+    ];
+    await _saveAccounts();
+    notifyListeners();
+  }
+
+  Future<void> deleteAllChildPersonalAndEducationalData(
+    String childId, {
+    bool removeProfileIfMultipleChildren = false,
+  }) async {
+    if (currentAccount == null) return;
+    final idx = currentAccount!.children.indexWhere((c) => c.id == childId);
+    if (idx == -1) return;
+
+    if (removeProfileIfMultipleChildren &&
+        currentAccount!.children.length > 1) {
+      currentAccount!.children.removeAt(idx);
+      if (currentAccount!.activeChildId == childId) {
+        currentAccount!.activeChildId = currentAccount!.children.first.id;
+      }
+      _syncLikedStateForActiveChild();
+      await _saveAccounts();
+      notifyListeners();
+      return;
+    }
+
+    final child = currentAccount!.children[idx];
+    child.starsEarned = 0;
+    child.intelligencePoints = 0;
+    child.gamesCompletedCount = 0;
+    child.correctPronunciationsCount = 0;
+    child.usedMinutesToday = 0;
+    child.watchedVideosToday = 0;
+    child.educationLevel = 'مبتدئ';
+    child.completedActivities.clear();
+    child.completedLessons.clear();
+    child.unlockedAchievements.clear();
+    child.unlockedCosmetics = ['hero_crown_basic'];
+    child.favoriteStoryIds.clear();
+    child.practicedVocabulary.clear();
+    child.gameProgressByGameId.clear();
+    child.likedVideoIds.clear();
+    child.isDeviceRemotelyLocked = false;
+    child.currentLiveStatus =
+        'تم حذف جميع البيانات التعليمية والشخصية المحلية لهذا الملف';
+    child.liveActivityTimeline = [
+      ChildActivityLogEntry(
+        timestampIso: DateTime.now().toIso8601String(),
+        actionTitle:
+            'تم حذف جميع البيانات التعليمية والشخصية المحلية المرتبطة بهذا الطفل',
+        categoryBadge: 'حذف شامل',
+      ),
+    ];
+    _syncLikedStateForActiveChild();
+    await _saveAccounts();
+    await _saveVideos();
+    notifyListeners();
+  }
+
+  Future<void> clearChildActivityAndResetProgress(String childId) async {
+    await deleteAllChildPersonalAndEducationalData(childId);
+  }
+
+  Future<bool> awardStarAndRecordActivity(
+    String activityKey, {
+    bool isPronunciation = false,
+    String? practicedWord,
+  }) async {
+    if (currentAccount == null) return false;
+    final child = currentAccount!.activeChild;
+    final String scopedKey = '${child.id}_act_$activityKey';
+    if (_inFlightRewardLocks.contains(scopedKey)) return false;
+    _inFlightRewardLocks.add(scopedKey);
+
+    try {
+      final bool isFirstTime = !child.completedActivities.contains(scopedKey) &&
+          !child.completedActivities.contains(activityKey);
+      if (practicedWord != null &&
+          practicedWord.trim().isNotEmpty &&
+          !child.practicedVocabulary.contains(practicedWord.trim())) {
+        child.practicedVocabulary.add(practicedWord.trim());
+      }
+      if (isFirstTime) {
+        child.completedActivities.add(scopedKey);
+        child.starsEarned++;
+        if (isPronunciation) {
+          child.correctPronunciationsCount++;
+        }
+        _evaluateAndUnlockChildAchievements(child);
+        if (currentAccount!.emailNotificationsEnabled &&
+            child.starsEarned % 3 == 0) {
+          await sendParentEmailAlert(
+            subject:
+                '🌟 إنجاز جديد للبطل ${child.name} — وصل إلى ${child.starsEarned} نجوم!',
+            bodyMessage:
+                'أحرز ${child.name} تقدماً رائعاً في الفصاحة والأنشطة التربوية وجمع الآن ${child.starsEarned} نجوم.',
+          );
+        }
+      }
+      await _saveAccounts();
+      notifyListeners();
+      return isFirstTime;
+    } finally {
+      _inFlightRewardLocks.remove(scopedKey);
+    }
   }
 
   Future<void> toggleLikeVideo(VideoModel video) async {
@@ -3614,24 +4237,53 @@ class AppStateManager extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> addCustomVideo(VideoModel newVideo) async {
+  Future<bool> addCustomVideo(VideoModel newVideo) async {
+    final String rawStream = newVideo.streamUrl.trim();
+    final bool isLocalFile =
+        rawStream.startsWith('/') || rawStream.startsWith('file://');
+    final activeChild = currentAccount?.activeChild;
+
+    if (!isLocalFile) {
+      if (activeChild != null && !activeChild.allowExternalVideos) {
+        return false;
+      }
+      if (!rawStream.toLowerCase().startsWith('https://')) {
+        return false;
+      }
+    }
+
     videos.insert(0, newVideo);
     _syncLikedStateForActiveChild();
     await _saveVideos();
     notifyListeners();
+    return true;
   }
 
   Future<List<VideoModel>> smartAutoImportFromAnyUrlOrPlaylist(
     String rawUrl, {
     bool forceChannelOrPlaylistMode = false,
   }) async {
+    final String trimmed = rawUrl.trim();
+    final bool isLocalFile =
+        trimmed.startsWith('/') || trimmed.startsWith('file://');
+    final activeChild = currentAccount?.activeChild;
+
+    if (!isLocalFile) {
+      if ((activeChild?.offlineOnlyMode ?? false) ||
+          !(activeChild?.allowExternalVideos ?? true) ||
+          !AppNetworkPolicyGuard.canPerformOutboundNetworkRequest(
+              isVideoImportOrStream: true)) {
+        return [];
+      }
+    }
+
     final bool isMulti = forceChannelOrPlaylistMode ||
-        await SmartVideoLinkAutoImporter.detectIfChannelOrPlaylistUrl(rawUrl);
+        await SmartVideoLinkAutoImporter.detectIfChannelOrPlaylistUrl(trimmed);
 
     if (isMulti) {
       final List<VideoModel> importedBatch =
           await SmartVideoLinkAutoImporter.autoImportChannelOrPlaylistFromUrl(
-        rawUrl,
+        trimmed,
         maxVideosToImport: 8,
       );
       if (importedBatch.isNotEmpty) {
@@ -3645,7 +4297,7 @@ class AppStateManager extends ChangeNotifier {
       return importedBatch;
     } else {
       final VideoModel? generatedVideo =
-          await SmartVideoLinkAutoImporter.autoImportAndGenerateFromUrl(rawUrl);
+          await SmartVideoLinkAutoImporter.autoImportAndGenerateFromUrl(trimmed);
       if (generatedVideo != null) {
         videos.insert(0, generatedVideo);
         _syncLikedStateForActiveChild();
@@ -3691,8 +4343,25 @@ class AppStateManager extends ChangeNotifier {
       return false;
     }
 
+    final activeChild = currentAccount?.activeChild;
+    if ((activeChild?.offlineOnlyMode ?? false) ||
+        !AppNetworkPolicyGuard.canPerformOutboundNetworkRequest(
+            isVideoImportOrStream: true)) {
+      lastSyncMessage =
+          '🔒 تم حظر الاتصال السحابي لأن «وضع عدم الاتصال (Offline Mode)» أو «منع الفيديوهات الخارجية» مفعّل حالياً.';
+      notifyListeners();
+      return false;
+    }
+
+    if (!cleanUrl.toLowerCase().startsWith('https://')) {
+      lastSyncMessage =
+          '🔒 لأسباب أمنية، يُسمح فقط بروابط HTTPS المشفرة للمزامنة السحابية.';
+      notifyListeners();
+      return false;
+    }
+
     isSyncingVideos = true;
-    lastSyncMessage = 'جاري الاتصال بالسحابة وسحب تغذية الفيديوهات...';
+    lastSyncMessage = 'جاري الاتصال بالسحابة عبر HTTPS وسحب تغذية الفيديوهات...';
     notifyListeners();
 
     try {
@@ -5225,14 +5894,106 @@ class _MultiChildProfilesScreenState extends State<MultiChildProfilesScreen> {
                 const SizedBox(height: 10),
                 GestureDetector(
                   onTap: () {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (_) => ParentalStudioScreen(
-                          appState: widget.appState,
-                          initialTabIndex: 0,
-                        ),
-                      ),
+                    final TextEditingController pinGateCtrl =
+                        TextEditingController();
+                    String? pinError;
+                    showDialog(
+                      context: context,
+                      builder: (dCtx) {
+                        return StatefulBuilder(
+                          builder: (dCtx, setDialogState) {
+                            return AlertDialog(
+                              backgroundColor: const Color(0xFF1E293B),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(20),
+                              ),
+                              title: const Row(
+                                children: [
+                                  Icon(Icons.lock_person_rounded,
+                                      color: Color(0xFFF59E0B)),
+                                  SizedBox(width: 8),
+                                  Expanded(
+                                    child: Text(
+                                      'تأكيد الرمز الأبوي السري (PIN)',
+                                      style: TextStyle(
+                                          fontSize: 16,
+                                          fontWeight: FontWeight.bold),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              content: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  const Text(
+                                    'للدخول إلى بوابة الوالدين وإعدادات الحماية، يرجى إدخال رمز PIN الأبوي المكون من ٤ أرقام:',
+                                    style: TextStyle(
+                                        fontSize: 12.5, color: Colors.white70),
+                                  ),
+                                  const SizedBox(height: 12),
+                                  TextField(
+                                    controller: pinGateCtrl,
+                                    obscureText: true,
+                                    keyboardType: TextInputType.number,
+                                    maxLength: 4,
+                                    textAlign: TextAlign.center,
+                                    decoration: const InputDecoration(
+                                      hintText: '••••',
+                                      counterText: '',
+                                    ),
+                                  ),
+                                  if (pinError != null) ...[
+                                    const SizedBox(height: 6),
+                                    Text(
+                                      pinError!,
+                                      style: const TextStyle(
+                                          color: Colors.redAccent,
+                                          fontSize: 12),
+                                    ),
+                                  ],
+                                ],
+                              ),
+                              actions: [
+                                TextButton(
+                                  onPressed: () => Navigator.pop(dCtx),
+                                  child: const Text('إلغاء'),
+                                ),
+                                ElevatedButton(
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: const Color(0xFF14B8A6),
+                                    foregroundColor: Colors.white,
+                                  ),
+                                  onPressed: () {
+                                    final bool ok = widget
+                                            .appState.currentAccount
+                                            ?.verifyParentalPin(
+                                                pinGateCtrl.text) ??
+                                        false;
+                                    if (ok) {
+                                      Navigator.pop(dCtx);
+                                      Navigator.push(
+                                        context,
+                                        MaterialPageRoute(
+                                          builder: (_) => ParentalStudioScreen(
+                                            appState: widget.appState,
+                                            initialTabIndex: 0,
+                                          ),
+                                        ),
+                                      );
+                                    } else {
+                                      setDialogState(() {
+                                        pinError =
+                                            'رمز PIN الأبوي غير صحيح.';
+                                      });
+                                    }
+                                  },
+                                  child: const Text('دخول بوابة الوالدين'),
+                                ),
+                              ],
+                            );
+                          },
+                        );
+                      },
                     );
                   },
                   child: Container(
@@ -5425,9 +6186,26 @@ class _VerticalVideoFeedPlayerScreenState
   int _currentVideoIndex = 0;
 
   List<VideoModel> get _filteredVideos {
-    final all = widget.appState.videos;
-    if (_selectedCategory == 'all') return all;
-    return all.where((v) => v.category == _selectedCategory).toList();
+    final child = widget.appState.currentAccount?.activeChild;
+    final bool offlineOnly = child?.offlineOnlyMode ?? false;
+    final bool allowExternal = child?.allowExternalVideos ?? true;
+
+    final allowedList = widget.appState.videos.where((v) {
+      final String u = v.streamUrl.trim().toLowerCase();
+      final bool isLocalFile = u.startsWith('/') || u.startsWith('file://');
+      final bool isBuiltInSafeSample =
+          u.startsWith('https://flutter.github.io/assets-for-api-docs/');
+      if (offlineOnly && !isLocalFile) {
+        return false;
+      }
+      if (!allowExternal && !isLocalFile && !isBuiltInSafeSample) {
+        return false;
+      }
+      return true;
+    }).toList();
+
+    if (_selectedCategory == 'all') return allowedList;
+    return allowedList.where((v) => v.category == _selectedCategory).toList();
   }
 
   void _onPageChanged(int index) {
@@ -5445,6 +6223,18 @@ class _VerticalVideoFeedPlayerScreenState
       context,
       MaterialPageRoute(
         builder: (_) => BrainGamesHubScreen(appState: widget.appState),
+      ),
+    );
+  }
+
+  void _openHaneenAcademy({int initialTab = 0}) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => HaneenAcademyScreen(
+          appState: widget.appState,
+          initialTabIndex: initialTab,
+        ),
       ),
     );
   }
@@ -5644,10 +6434,52 @@ class _VerticalVideoFeedPlayerScreenState
                             widget.appState.currentAssistantBannerMessage =
                                 calmBreathing;
                           });
-                          CalmVoiceService.instance.speakCalmly(
-                            calmBreathing,
-                            rate: 0.34,
-                          );
+                        },
+                      ),
+                      ActionChip(
+                        backgroundColor: const Color(0xFF0F172A),
+                        avatar: const Text('🎓'),
+                        label: const Text('افتح أكاديمية حنين التعليمية'),
+                        onPressed: () {
+                          Navigator.pop(ctx);
+                          _openHaneenAcademy(initialTab: 0);
+                        },
+                      ),
+                      ActionChip(
+                        backgroundColor: const Color(0xFF0F172A),
+                        avatar: const Text('📖'),
+                        label: const Text('اقرأ لي قصة تفاعلية'),
+                        onPressed: () {
+                          Navigator.pop(ctx);
+                          _openHaneenAcademy(initialTab: 1);
+                        },
+                      ),
+                      ActionChip(
+                        backgroundColor: const Color(0xFF0F172A),
+                        avatar: const Text('🗺️'),
+                        label: const Text('خريطة النجوم والمكافآت'),
+                        onPressed: () {
+                          Navigator.pop(ctx);
+                          _openHaneenAcademy(initialTab: 2);
+                        },
+                      ),
+                      ActionChip(
+                        backgroundColor: const Color(0xFF0F172A),
+                        avatar: const Text('❓'),
+                        label: const Text('اسألني سؤالاً علمياً بسيطاً'),
+                        onPressed: () {
+                          const List<String> safeQaList = [
+                            '🦋 سؤال وجواب: لماذا تطير الفراشة بين الأزهار؟ لجمع الرحيق اللذيذ ومساعدة النباتات على النمو!',
+                            '🌞 سؤال وجواب: ما فائدة الشمس صباحاً؟ تمنحنا الدفء والضوء وتساعد النباتات الخضراء على النمو!',
+                            '🦷 سؤال وجواب: لماذا نغسل أسناننا قبل النوم؟ لنحافظ عليها نظيفة وقوية وبيضاء كاللؤلؤ!',
+                            '🛡️ تذكير الأمان: أنا مساعد برمجي ذكي للتعلم؛ لا أطلب أبداً اسمك الكامل أو عنوانك أو مدرستك، وإذا خطر ببالك سؤال كبير فاسأل ماما أو بابا دائماً!',
+                          ];
+                          final nextQa = safeQaList[
+                              DateTime.now().second % safeQaList.length];
+                          setModalState(() {
+                            widget.appState.currentAssistantBannerMessage =
+                                nextQa;
+                          });
                         },
                       ),
                     ],
@@ -5778,6 +6610,14 @@ class _VerticalVideoFeedPlayerScreenState
                     const SizedBox(height: 16),
                     GestureDetector(
                       onTap: () async {
+                        if (!(widget.appState.currentAccount?.activeChild.allowMicrophone ?? true)) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text('الميكروفون معطل لهذا الطفل من إعدادات الرقابة الأبوية.'),
+                            ),
+                          );
+                          return;
+                        }
                         if (isListeningMic) {
                           await CalmVoiceService.instance.stopListening();
                           setModalState(() => isListeningMic = false);
@@ -5787,18 +6627,21 @@ class _VerticalVideoFeedPlayerScreenState
                         setModalState(() {
                           isListeningMic = true;
                         });
-                        final bool sttReady = await CalmVoiceService.instance
-                            .initSpeechRecognition();
-                        if (sttReady) {
-                          await CalmVoiceService.instance.startListening(
-                            onResult: (words) {
-                              if (ctx.mounted) {
-                                setModalState(() {
-                                  spokenCtrl.text = words;
-                                });
-                              }
-                            },
-                          );
+                        String? micDeniedMessage;
+                        final bool started =
+                            await CalmVoiceService.instance.startListening(
+                          onResult: (words) {
+                            if (ctx.mounted) {
+                              setModalState(() {
+                                spokenCtrl.text = words;
+                              });
+                            }
+                          },
+                          onPermissionOrPolicyDenied: (reason) {
+                            micDeniedMessage = reason;
+                          },
+                        );
+                        if (started) {
                           await Future.delayed(const Duration(seconds: 4));
                           await CalmVoiceService.instance.stopListening();
                           if (ctx.mounted) {
@@ -5808,15 +6651,17 @@ class _VerticalVideoFeedPlayerScreenState
                             }
                           }
                         } else {
-                          await Future.delayed(const Duration(seconds: 2));
                           if (ctx.mounted) {
-                            setModalState(() {
-                              isListeningMic = false;
-                              if (spokenCtrl.text.trim().isEmpty) {
-                                spokenCtrl.text = item.repeatPhrase;
-                              }
-                            });
-                            await verifyAndSpeakCorrection();
+                            setModalState(() => isListeningMic = false);
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text(
+                                  micDeniedMessage ??
+                                      'الميكروفون غير متاح حالياً؛ يمكنك الاستماع للنطق الصحيح والترديد الحر.',
+                                ),
+                                backgroundColor: const Color(0xFFF59E0B),
+                              ),
+                            );
                           }
                         }
                       },
@@ -5846,12 +6691,14 @@ class _VerticalVideoFeedPlayerScreenState
                     ),
                     const SizedBox(height: 8),
                     Text(
-                      isListeningMic
-                          ? '🎙️ تحدث الآن بصوت واضح... أنا أستمع لنطقك'
-                          : 'اضغط على الميكروفون للتحدث أو راجع ما سمعه التطبيق أدناه:',
+                      !(widget.appState.currentAccount?.activeChild.allowMicrophone ?? true)
+                          ? '🔒 الميكروفون معطل حالياً من إعدادات ولي الأمر (وضع الاستماع والترديد الحر فقط)'
+                          : (isListeningMic
+                              ? '🎙️ تحدث الآن بصوت واضح... أنا أستمع لنطقك'
+                              : 'اضغط على الميكروفون للتدرب على الاستماع والتكرار (ملاحظة لولي الأمر: يعتمد هذا النشاط على التعرف اللغوي التشجيعي للكلمات ولا يُعد تشخيصاً طبياً لمخارج الحروف، ولا يتم حفظ أي تسجيل صوتي):'),
                       textAlign: TextAlign.center,
                       style:
-                          const TextStyle(fontSize: 13, color: Colors.white70),
+                          const TextStyle(fontSize: 11.5, color: Colors.white70),
                     ),
                     const SizedBox(height: 12),
                     Row(
@@ -6134,35 +6981,19 @@ class _VerticalVideoFeedPlayerScreenState
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   const Text(
-                    'للدخول إلى استوديو الفيديوهات والاشتراكات والتنبيهات، حل المعادلة أو أدخل الرمز السري (PIN):',
+                    'للدخول إلى بوابة الوالدين واستوديو الإعدادات، يرجى إدخال الرمز الأبوي السري (PIN المكون من ٤ أرقام):',
                     style: TextStyle(color: Colors.white70, fontSize: 13),
-                  ),
-                  const SizedBox(height: 16),
-                  Center(
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 20, vertical: 10),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF0F172A),
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: Text(
-                        'كم ناتج:  $a × $b = ؟',
-                        style: const TextStyle(
-                          fontSize: 20,
-                          fontWeight: FontWeight.bold,
-                          color: Color(0xFF14B8A6),
-                        ),
-                      ),
-                    ),
                   ),
                   const SizedBox(height: 14),
                   TextField(
                     controller: answerCtrl,
+                    obscureText: true,
+                    maxLength: 4,
                     keyboardType: TextInputType.number,
                     textAlign: TextAlign.center,
                     decoration: const InputDecoration(
-                      hintText: 'أدخل ناتج المعادلة أو رمز PIN',
+                      hintText: 'أدخل رمز PIN الأبوي (••••)',
+                      counterText: '',
                     ),
                   ),
                   if (gateError != null) ...[
@@ -6188,9 +7019,10 @@ class _VerticalVideoFeedPlayerScreenState
                   ),
                   onPressed: () {
                     final input = answerCtrl.text.trim();
-                    final pin =
-                        widget.appState.currentAccount?.parentalPin ?? '1234';
-                    if (input == expected.toString() || input == pin) {
+                    final bool pinValid = widget.appState.currentAccount
+                            ?.verifyParentalPin(input) ??
+                        false;
+                    if (pinValid) {
                       Navigator.pop(ctx);
                       Navigator.push(
                         context,
@@ -6363,6 +7195,33 @@ class _VerticalVideoFeedPlayerScreenState
                         ),
                       ),
                       const Spacer(),
+                      GestureDetector(
+                        onTap: () => _openHaneenAcademy(initialTab: 0),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 7, vertical: 4),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF10B981).withOpacity(0.85),
+                            borderRadius: BorderRadius.circular(16),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const Text('🎓', style: TextStyle(fontSize: 11)),
+                              const SizedBox(width: 3),
+                              Text(
+                                'الأكاديمية (${activeChild.completedLessons.length})',
+                                style: const TextStyle(
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.bold,
+                                  color: Colors.white,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 4),
                       GestureDetector(
                         onTap: _openBrainGamesHub,
                         child: Container(
@@ -6872,6 +7731,42 @@ class _VerticalVideoFeedItemWidgetState
     }
 
     String url = normalizeStreamOrLocalUrl(raw);
+    final bool isLocalFile =
+        url.startsWith('/') || url.startsWith('file://');
+    final bool isBuiltInSafeSample = url
+        .toLowerCase()
+        .startsWith('https://flutter.github.io/assets-for-api-docs/');
+
+    if (!isLocalFile) {
+      if (AppNetworkPolicyGuard.isOfflineOnlyModeActive) {
+        if (mounted) {
+          setState(() {
+            _hasError = true;
+            _isInitialized = false;
+          });
+        }
+        return;
+      }
+      if (!AppNetworkPolicyGuard.isExternalVideosAllowed &&
+          !isBuiltInSafeSample) {
+        if (mounted) {
+          setState(() {
+            _hasError = true;
+            _isInitialized = false;
+          });
+        }
+        return;
+      }
+      if (!url.toLowerCase().startsWith('https://')) {
+        if (mounted) {
+          setState(() {
+            _hasError = true;
+            _isInitialized = false;
+          });
+        }
+        return;
+      }
+    }
 
     String separateAudioUrl = widget.video.audioStreamUrl.trim();
 
@@ -7504,8 +8399,7 @@ class _ParentalStudioScreenState extends State<ParentalStudioScreen>
         TextEditingController(text: widget.appState.paymentVerifyApiUrl);
     _merchantKeyCtrl =
         TextEditingController(text: widget.appState.merchantSecretKey);
-    _pinUpdateCtrl = TextEditingController(
-        text: widget.appState.currentAccount?.parentalPin ?? '1234');
+    _pinUpdateCtrl = TextEditingController();
   }
 
   @override
@@ -8101,19 +8995,31 @@ class _ParentalStudioScreenState extends State<ParentalStudioScreen>
       likes: 100,
     );
 
-    widget.appState.addCustomVideo(newVideo);
-    _vTitleCtrl.clear();
-    _vDescCtrl.clear();
-    _vUrlCtrl.clear();
-    _vPhraseCtrl.clear();
-    _vActivityCtrl.clear();
+    widget.appState.addCustomVideo(newVideo).then((added) {
+      if (!mounted) return;
+      if (!added) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+                '🔒 تم رفض الرابط: تأكد أن السماح بالفيديوهات الخارجية مفعّل أو استخدم مسار ملف محلي (/storage/...) أو رابط HTTPS مشفر.'),
+            backgroundColor: Colors.redAccent,
+          ),
+        );
+        return;
+      }
+      _vTitleCtrl.clear();
+      _vDescCtrl.clear();
+      _vUrlCtrl.clear();
+      _vPhraseCtrl.clear();
+      _vActivityCtrl.clear();
 
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('✅ تمت إضافة الفيديو بنجاح إلى المكتبة المحلية!'),
-        backgroundColor: Color(0xFF14B8A6),
-      ),
-    );
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('✅ تمت إضافة الفيديو بنجاح إلى المكتبة المحلية!'),
+          backgroundColor: Color(0xFF14B8A6),
+        ),
+      );
+    });
   }
 
   void _copyExportedJson() {
@@ -8248,17 +9154,248 @@ class _ParentalStudioScreenState extends State<ParentalStudioScreen>
                     icon: Icons.timer_outlined,
                   ),
                   _MonitorStatBadge(
-                    label: 'نقاط الذكاء',
-                    value: '🧠 ${activeChild.intelligencePoints}',
-                    icon: Icons.psychology_outlined,
+                    label: 'الأكاديمية والذكاء',
+                    value:
+                        '🎓 ${activeChild.completedLessons.length} | 🧠 ${activeChild.intelligencePoints}',
+                    icon: Icons.school_outlined,
                   ),
                   _MonitorStatBadge(
-                    label: 'النجوم والفصاحة',
+                    label: 'النجوم والأوسمة',
                     value:
-                        '⭐ ${activeChild.starsEarned} (${activeChild.correctPronunciationsCount})',
+                        '⭐ ${activeChild.starsEarned} | 🏅 ${activeChild.unlockedAchievements.length}',
                     icon: Icons.star_border_rounded,
                   ),
                 ],
+              ),
+              const SizedBox(height: 12),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF0F172A),
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: Colors.white12),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      '📊 ملخص التقدم التعليمي والمهارات لـ (${activeChild.name} • المستوى: ${activeChild.educationLevel}):',
+                      style: const TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.bold,
+                        color: Color(0xFFA7F3D0),
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      '• الكلمات والمفردات التي تدرب عليها: ${activeChild.practicedVocabulary.isEmpty ? "لم يبدأ بعد (شجعه على زيارة أكاديمية حنين)" : activeChild.practicedVocabulary.join(" ، ")}',
+                      style: const TextStyle(fontSize: 11.5, color: Colors.white70),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      '• مهارات متقنة: ${activeChild.completedLessons.length >= 2 ? "التعرف البصري والمفردات الأساسية" : "في بداية مسار الاستكشاف"} | مهارات مقترح التركيز عليها: ${activeChild.correctPronunciationsCount < 2 ? "الاستماع وترديد الجمل العربية" : "الألغاز والترتيب المنطقي"}',
+                      style: const TextStyle(fontSize: 11.5, color: Color(0xFFFDE68A)),
+                    ),
+                    const SizedBox(height: 4),
+                    const Text(
+                      'ℹ️ ملاحظة تربوية: هذه المؤشرات لعرض تقدم أنشطة التعلم فقط ولا تمثل أي تقييم طبي أو تشخيصي.',
+                      style: TextStyle(fontSize: 10, color: Colors.white54),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 10),
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF0F172A),
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: Colors.white12),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      '🛡️ ضوابط الأمان والخصوصية المستقلة لهذا الطفل:',
+                      style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.bold,
+                          color: Color(0xFF38BDF8)),
+                    ),
+                    SwitchListTile(
+                      dense: true,
+                      contentPadding: EdgeInsets.zero,
+                      value: activeChild.allowMicrophone,
+                      activeColor: const Color(0xFF14B8A6),
+                      onChanged: (v) => widget.appState
+                          .updateChildPrivacyAndSafetyControls(
+                              childId: activeChild.id, allowMicrophone: v),
+                      title: const Text('السماح بالميكروفون في نشاط «ردد معي»',
+                          style: TextStyle(fontSize: 12)),
+                      subtitle: const Text(
+                          'يُستخدم محلياً للتدرب على الكلمات ولا يتم حفظ أي تسجيل صوتي',
+                          style: TextStyle(fontSize: 10, color: Colors.white60)),
+                    ),
+                    SwitchListTile(
+                      dense: true,
+                      contentPadding: EdgeInsets.zero,
+                      value: activeChild.allowExternalVideos,
+                      activeColor: const Color(0xFF14B8A6),
+                      onChanged: (v) => widget.appState
+                          .updateChildPrivacyAndSafetyControls(
+                              childId: activeChild.id, allowExternalVideos: v),
+                      title: const Text(
+                          'السماح باستيراد وتشغيل الفيديوهات الخارجية',
+                          style: TextStyle(fontSize: 12)),
+                      subtitle: const Text(
+                          'عند إغلاقه يُمنع استيراد أو تشغيل أي روابط خارجية ويُسمح بالمحتوى المحلي فقط',
+                          style: TextStyle(fontSize: 10, color: Colors.white60)),
+                    ),
+                    SwitchListTile(
+                      dense: true,
+                      contentPadding: EdgeInsets.zero,
+                      value: activeChild.offlineOnlyMode,
+                      activeColor: const Color(0xFFF59E0B),
+                      onChanged: (v) => widget.appState
+                          .updateChildPrivacyAndSafetyControls(
+                              childId: activeChild.id, offlineOnlyMode: v),
+                      title: const Text(
+                          'وضع عدم الاتصال الفعلي (Offline-Only Mode)',
+                          style: TextStyle(fontSize: 12)),
+                      subtitle: const Text(
+                          'يمنع التطبيق برمجياً من بدء أي طلبات شبكة خارجية ويشغّل الدروس والألعاب المحلية فقط',
+                          style: TextStyle(fontSize: 10, color: Colors.white60)),
+                    ),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Text('المستوى التعليمي للطفل:',
+                            style: TextStyle(fontSize: 12)),
+                        DropdownButton<String>(
+                          value: ['مبتدئ', 'متوسط', 'متقدم']
+                                  .contains(activeChild.educationLevel)
+                              ? activeChild.educationLevel
+                              : 'مبتدئ',
+                          items: const [
+                            DropdownMenuItem(
+                                value: 'مبتدئ',
+                                child: Text('مبتدئ (٢–٤ سنوات)',
+                                    style: TextStyle(fontSize: 12))),
+                            DropdownMenuItem(
+                                value: 'متوسط',
+                                child: Text('متوسط (٣–٦ سنوات)',
+                                    style: TextStyle(fontSize: 12))),
+                            DropdownMenuItem(
+                                value: 'متقدم',
+                                child: Text('متقدم (٦–٩ سنوات)',
+                                    style: TextStyle(fontSize: 12))),
+                          ],
+                          onChanged: (lvl) {
+                            if (lvl != null) {
+                              widget.appState
+                                  .updateChildPrivacyAndSafetyControls(
+                                      childId: activeChild.id,
+                                      educationLevel: lvl);
+                            }
+                          },
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 6),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 6,
+                      children: [
+                        OutlinedButton.icon(
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: const Color(0xFFF59E0B),
+                            side: const BorderSide(color: Color(0xFFF59E0B)),
+                          ),
+                          onPressed: () async {
+                            await widget.appState
+                                .clearChildActivityHistoryOnly(activeChild.id);
+                            if (mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                  content: Text(
+                                      '🧹 تم مسح سجل النشاط الزمني فقط للطفل (${activeChild.name}) مع الاحتفاظ بالدروس والنجوم والأوسمة.'),
+                                ),
+                              );
+                            }
+                          },
+                          icon: const Icon(Icons.history_toggle_off_rounded,
+                              size: 16),
+                          label: const Text(
+                            'مسح سجل النشاط فقط',
+                            style: TextStyle(fontSize: 11),
+                          ),
+                        ),
+                        ElevatedButton.icon(
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.redAccent.withOpacity(0.85),
+                            foregroundColor: Colors.white,
+                          ),
+                          onPressed: () {
+                            showDialog(
+                              context: context,
+                              builder: (dCtx) => AlertDialog(
+                                backgroundColor: const Color(0xFF1E293B),
+                                title: Text(
+                                  '⚠️ تأكيد حذف جميع بيانات (${activeChild.name})',
+                                  style: const TextStyle(
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.bold),
+                                ),
+                                content: const Text(
+                                  'سيؤدي هذا الإجراء إلى حذف جميع البيانات التعليمية والشخصية المخزنة محلياً لهذا الطفل (الدروس المكتملة، النجوم، الأوسمة، المفردات، المفضلة، نتائج الألعاب، وسجل النشاط) دون المساس بملفات الأطفال الآخرين.',
+                                  style: TextStyle(
+                                      fontSize: 13, color: Colors.white70),
+                                ),
+                                actions: [
+                                  TextButton(
+                                    onPressed: () => Navigator.pop(dCtx),
+                                    child: const Text('إلغاء'),
+                                  ),
+                                  ElevatedButton(
+                                    style: ElevatedButton.styleFrom(
+                                      backgroundColor: Colors.redAccent,
+                                      foregroundColor: Colors.white,
+                                    ),
+                                    onPressed: () async {
+                                      Navigator.pop(dCtx);
+                                      await widget.appState
+                                          .deleteAllChildPersonalAndEducationalData(
+                                              activeChild.id);
+                                      if (mounted) {
+                                        ScaffoldMessenger.of(context)
+                                            .showSnackBar(
+                                          SnackBar(
+                                            content: Text(
+                                                '🗑️ تم حذف جميع البيانات التعليمية والشخصية المحلية المرتبطة بالطفل (${activeChild.name}) بنجاح.'),
+                                            backgroundColor: Colors.redAccent,
+                                          ),
+                                        );
+                                      }
+                                    },
+                                    child: const Text('حذف جميع بيانات الطفل'),
+                                  ),
+                                ],
+                              ),
+                            );
+                          },
+                          icon: const Icon(Icons.delete_forever_rounded,
+                              size: 16),
+                          label: const Text(
+                            'حذف جميع بيانات الطفل',
+                            style: TextStyle(
+                                fontSize: 11, fontWeight: FontWeight.bold),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
               ),
               const SizedBox(height: 16),
               TextField(
@@ -9066,16 +10203,16 @@ class _ParentalStudioScreenState extends State<ParentalStudioScreen>
                               ),
                               ActionChip(
                                 backgroundColor: const Color(0xFF0F172A),
-                                avatar: const Icon(Icons.wifi_tethering,
+                                avatar: const Icon(Icons.lock_outline,
                                     size: 16, color: Color(0xFFF59E0B)),
                                 label: const Text(
-                                  'قالب سيرفر محلي (Wi-Fi LAN)',
+                                  'قالب رابط سحابي مشفر (HTTPS MP4)',
                                   style: TextStyle(fontSize: 11),
                                 ),
                                 onPressed: () {
                                   setState(() {
                                     _vUrlCtrl.text =
-                                        'http://192.168.1.100:8000/video1.mp4';
+                                        'https://flutter.github.io/assets-for-api-docs/assets/videos/butterfly.mp4';
                                   });
                                 },
                               ),
@@ -9955,7 +11092,7 @@ class _ParentalStudioScreenState extends State<ParentalStudioScreen>
                             ),
                           ),
                           subtitle: Text(
-                            'البريد / الهاتف: ${account.emailOrPhone}\nطريقة الدخول: ${account.authProvider == 'google' ? 'حساب Google الموثق' : 'بريد إلكتروني'}\nالرمز الأبوي الحالي (PIN): ${account.parentalPin}',
+                            'البريد / الهاتف: ${account.emailOrPhone}\nطريقة الدخول: ${account.authProvider == 'google' ? 'حساب Google الموثق' : 'بريد إلكتروني'}\nالرمز الأبوي (PIN): •••• (محمي ومشفر)',
                             style: const TextStyle(color: Colors.white70),
                           ),
                         ),
@@ -11581,9 +12718,47 @@ class _BrainGamesHubScreenState extends State<BrainGamesHubScreen> {
   String? _wordFeedback;
   bool _wordCorrect = false;
 
+  int _picMatchIndex = 0;
+  String? _picMatchFeedback;
+
+  int _classifyIndex = 0;
+  String? _classifyFeedback;
+
+  int _soundGameIndex = 0;
+  String? _soundGameFeedback;
+
+  int _seqGameIndex = 0;
+  List<int> _userSequenceOrder = [];
+  String? _seqGameFeedback;
+
+  String? _loadedChildId;
+
+  void _syncChildGameProgressLevels() {
+    final child = widget.appState.currentAccount?.activeChild;
+    if (child == null || _loadedChildId == child.id) return;
+    _loadedChildId = child.id;
+    _etiquetteBoardIndex =
+        (child.gameProgressByGameId['etiquette_draw'] ?? 0) % 100;
+    _oddQuestionIndex =
+        (child.gameProgressByGameId['odd_one_out'] ?? 0) % 100;
+    _patternQuestionIndex =
+        (child.gameProgressByGameId['pattern_logic'] ?? 0) % 100;
+    _memoryLevel =
+        ((child.gameProgressByGameId['memory_match_lvl'] ?? 0) % 100) + 1;
+    _mathQuestionIndex =
+        (child.gameProgressByGameId['visual_math'] ?? 0) % 100;
+    _wordQuestionIndex =
+        (child.gameProgressByGameId['arabic_word'] ?? 0) % 100;
+    _picMatchIndex = child.gameProgressByGameId['pic_match'] ?? 0;
+    _classifyIndex = child.gameProgressByGameId['classify'] ?? 0;
+    _soundGameIndex = child.gameProgressByGameId['sound_id'] ?? 0;
+    _seqGameIndex = child.gameProgressByGameId['seq'] ?? 0;
+  }
+
   @override
   void initState() {
     super.initState();
+    _syncChildGameProgressLevels();
     _initMemoryGame();
     widget.appState.logChildRealtimeActivity(
       statusSummary: '🧠 يتفاعل داخل واحة الـ ١٠٠ مرحلة لألعاب الذكاء والآداب',
@@ -11736,6 +12911,9 @@ class _BrainGamesHubScreenState extends State<BrainGamesHubScreen> {
       builder: (context, _) {
         final child = widget.appState.currentAccount?.activeChild;
         if (child == null) return const SizedBox.shrink();
+        if (_loadedChildId != child.id) {
+          _syncChildGameProgressLevels();
+        }
 
         final List<Map<String, dynamic>> gamesMeta = [
           {
@@ -11773,6 +12951,30 @@ class _BrainGamesHubScreenState extends State<BrainGamesHubScreen> {
             'icon': '🔤',
             'skill': '١٠٠ تحدٍ للذكاء اللغوي ومخارج الحروف العربية',
             'color': const Color(0xFFA855F7),
+          },
+          {
+            'title': 'مطابقة الصور والكلمات',
+            'icon': '🖼️',
+            'skill': 'اختر الصورة الصحيحة التي تطابق الكلمة والوصف',
+            'color': const Color(0xFF06B6D4),
+          },
+          {
+            'title': 'لعبة التصنيف الذكي',
+            'icon': '🗂️',
+            'skill': 'صنّف الحيوانات والفواكه ووسائل النقل في مجموعاتها',
+            'color': const Color(0xFF10B981),
+          },
+          {
+            'title': 'أصوات الحيوانات والبيئة',
+            'icon': '🔊',
+            'skill': 'تعرّف على صاحب الصوت وبيئته الطبيعية',
+            'color': const Color(0xFFF97316),
+          },
+          {
+            'title': 'الترتيب والتسلسل المنطقي',
+            'icon': '🪜',
+            'skill': 'رتّب خطوات العادات اليومية بترتيبها الصحيح',
+            'color': const Color(0xFFEC4899),
           },
         ];
 
@@ -11905,6 +13107,14 @@ class _BrainGamesHubScreenState extends State<BrainGamesHubScreen> {
         return _buildVisualMathGame();
       case 5:
         return _buildArabicWordBuilderGame();
+      case 6:
+        return _buildPictureWordMatchingGame();
+      case 7:
+        return _buildCategoryClassificationGame();
+      case 8:
+        return _buildSoundSourceIdentificationGame();
+      case 9:
+        return _buildLogicalSequenceOrderingGame();
       default:
         return _buildEtiquetteDrawingStudioGame();
     }
@@ -13019,6 +14229,1941 @@ class _BrainGamesHubScreenState extends State<BrainGamesHubScreen> {
           ),
         ],
       ),
+    );
+  }
+  Widget _buildPictureWordMatchingGame() {
+    const List<Map<String, dynamic>> items = [
+      {
+        'word': 'تُفَّاحَةٌ حَمْرَاءُ',
+        'hint': 'فاكهة لذيذة ومفيدة للجسم',
+        'correct': '🍎',
+        'options': ['🍎', '🚗', '🦁', '⚽'],
+      },
+      {
+        'word': 'أَسَدٌ شُجَاعٌ',
+        'hint': 'يعيش في الغابة ويسمى ملك الغابة',
+        'correct': '🦁',
+        'options': ['🐟', '🦁', '🍌', '✈️'],
+      },
+      {
+        'word': 'طَائِرَةٌ سَرِيعَةٌ',
+        'hint': 'وسيلة نقل تطير في السماء فوق السحاب',
+        'correct': '✈️',
+        'options': ['🚢', '🚲', '✈️', '🐢'],
+      },
+      {
+        'word': 'فَرَاشَةٌ مُلَوَّنَةٌ',
+        'hint': 'تطير بهدوء بين الأزهار في الحديقة',
+        'correct': '🦋',
+        'options': ['🐘', '🦋', '🏠', '📚'],
+      },
+      {
+        'word': 'كِتَابٌ مُفِيدٌ',
+        'hint': 'نقرأ فيه القصص الجميلة ونتعلم منه العلوم',
+        'correct': '📘',
+        'options': ['📘', '🍕', '🎈', '👟'],
+      },
+    ];
+    final current = items[_picMatchIndex % items.length];
+    final List<String> opts = List<String>.from(current['options'] as List);
+
+    return Container(
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1E293B),
+        borderRadius: BorderRadius.circular(22),
+        border: Border.all(color: const Color(0xFF06B6D4).withOpacity(0.6)),
+      ),
+      child: Column(
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                '🖼️ مطابقة الصور والكلمات (${(_picMatchIndex % items.length) + 1} / ${items.length})',
+                style:
+                    const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+              ),
+              IconButton(
+                tooltip: 'استمع للكلمة',
+                onPressed: () {
+                  CalmVoiceService.instance.speakCalmly(
+                    '${current['word']}، ${current['hint']}',
+                    allowSpeechForRepeatGame: true,
+                  );
+                },
+                icon: const Icon(Icons.volume_up_rounded,
+                    color: Color(0xFF06B6D4)),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: const Color(0xFF0F172A),
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: Column(
+              children: [
+                Text(
+                  current['word'] as String,
+                  style: const TextStyle(
+                    fontSize: 24,
+                    fontWeight: FontWeight.bold,
+                    color: Color(0xFFFDE68A),
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  current['hint'] as String,
+                  style: const TextStyle(fontSize: 13, color: Colors.white70),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 16),
+          Wrap(
+            spacing: 14,
+            runSpacing: 14,
+            alignment: WrapAlignment.center,
+            children: opts.map((emojiOpt) {
+              return GestureDetector(
+                onTap: () async {
+                  if (emojiOpt == current['correct']) {
+                    final isNew = await widget.appState.recordBrainGameWin(
+                      gameId: 'pic_match_${_picMatchIndex % items.length}',
+                      gameTitle: 'مطابقة الصور والكلمات',
+                      earnedIqPoints: 12,
+                      earnedStars: 1,
+                      learnedWord: current['word'] as String,
+                    );
+                    setState(() {
+                      _picMatchFeedback = isNew
+                          ? '✅ تطابق ممتاز يا بطل! حصلت على نجمة جديدة ⭐'
+                          : '✅ إجابة صحيحة! أحسنت المراجعة والتثبيت!';
+                      _heroReactionMessage =
+                          'سبايدي يلوّح لك: اختيار رائع للصورة المطابقة!';
+                    });
+                  } else {
+                    setState(() {
+                      _picMatchFeedback =
+                          '💡 تأمل الكلمة مرة أخرى بهدوء وجرب الصورة المناسبة!';
+                    });
+                  }
+                },
+                child: Container(
+                  width: 82,
+                  height: 82,
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF0F172A),
+                    borderRadius: BorderRadius.circular(18),
+                    border: Border.all(
+                        color: const Color(0xFF06B6D4).withOpacity(0.6),
+                        width: 1.5),
+                  ),
+                  child: Text(emojiOpt, style: const TextStyle(fontSize: 42)),
+                ),
+              );
+            }).toList(),
+          ),
+          if (_picMatchFeedback != null) ...[
+            const SizedBox(height: 12),
+            Text(
+              _picMatchFeedback!,
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                  fontWeight: FontWeight.bold, color: Color(0xFF38BDF8)),
+            ),
+          ],
+          const SizedBox(height: 14),
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton.icon(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF06B6D4),
+                foregroundColor: Colors.white,
+              ),
+              onPressed: () {
+                setState(() {
+                  _picMatchIndex = (_picMatchIndex + 1) % items.length;
+                  _picMatchFeedback = null;
+                });
+              },
+              icon: const Icon(Icons.navigate_next),
+              label: const Text('التحدي التالي'),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildCategoryClassificationGame() {
+    const List<Map<String, dynamic>> items = [
+      {
+        'itemEmoji': '🍌',
+        'itemName': 'الموز اللذيذ',
+        'correctCategory': 'فواكه وغذاء 🍎',
+        'categories': ['حيوانات الغابة 🦁', 'فواكه وغذاء 🍎', 'وسائل نقل 🚗'],
+      },
+      {
+        'itemEmoji': '🚂',
+        'itemName': 'القطار السريع',
+        'correctCategory': 'وسائل نقل 🚗',
+        'categories': ['حيوانات الغابة 🦁', 'فواكه وغذاء 🍎', 'وسائل نقل 🚗'],
+      },
+      {
+        'itemEmoji': '🦒',
+        'itemName': 'الزرافة الطويلة',
+        'correctCategory': 'حيوانات الغابة 🦁',
+        'categories': ['حيوانات الغابة 🦁', 'فواكه وغذاء 🍎', 'وسائل نقل 🚗'],
+      },
+      {
+        'itemEmoji': '🍓',
+        'itemName': 'الفراولة الحمراء',
+        'correctCategory': 'فواكه وغذاء 🍎',
+        'categories': ['حيوانات الغابة 🦁', 'فواكه وغذاء 🍎', 'وسائل نقل 🚗'],
+      },
+    ];
+    final current = items[_classifyIndex % items.length];
+    final List<String> cats = List<String>.from(current['categories'] as List);
+
+    return Container(
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1E293B),
+        borderRadius: BorderRadius.circular(22),
+        border: Border.all(color: const Color(0xFF10B981).withOpacity(0.6)),
+      ),
+      child: Column(
+        children: [
+          Text(
+            '🗂️ لعبة التصنيف الذكي (${(_classifyIndex % items.length) + 1} / ${items.length})',
+            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+          ),
+          const SizedBox(height: 12),
+          Text(current['itemEmoji'] as String,
+              style: const TextStyle(fontSize: 58)),
+          const SizedBox(height: 6),
+          Text(
+            'إلى أي مجموعة ينتمي «${current['itemName']}»؟',
+            style: const TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.bold,
+                color: Color(0xFFFDE68A)),
+          ),
+          const SizedBox(height: 14),
+          ...cats.map((catName) {
+            return Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: SizedBox(
+                width: double.infinity,
+                height: 46,
+                child: OutlinedButton(
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: Colors.white,
+                    side: const BorderSide(color: Color(0xFF10B981)),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(14)),
+                  ),
+                  onPressed: () async {
+                    if (catName == current['correctCategory']) {
+                      await widget.appState.recordBrainGameWin(
+                        gameId: 'classify_${_classifyIndex % items.length}',
+                        gameTitle: 'لعبة التصنيف الذكي',
+                        earnedIqPoints: 12,
+                        earnedStars: 1,
+                        learnedWord: current['itemName'] as String,
+                      );
+                      setState(() {
+                        _classifyFeedback =
+                            '✅ تصنيف ذكي وصحيح! (${current['itemName']}) من مجموعة ($catName)';
+                      });
+                    } else {
+                      setState(() {
+                        _classifyFeedback =
+                            '💡 فكر بهدوء: هل نأكله أم نركبه أم يعيش في الطبيعة؟';
+                      });
+                    }
+                  },
+                  child: Text(catName,
+                      style: const TextStyle(
+                          fontSize: 15, fontWeight: FontWeight.bold)),
+                ),
+              ),
+            );
+          }),
+          if (_classifyFeedback != null) ...[
+            const SizedBox(height: 8),
+            Text(
+              _classifyFeedback!,
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                  color: Color(0xFFA7F3D0), fontWeight: FontWeight.bold),
+            ),
+          ],
+          const SizedBox(height: 10),
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton.icon(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF10B981),
+                foregroundColor: Colors.white,
+              ),
+              onPressed: () {
+                setState(() {
+                  _classifyIndex = (_classifyIndex + 1) % items.length;
+                  _classifyFeedback = null;
+                });
+              },
+              icon: const Icon(Icons.navigate_next),
+              label: const Text('العنصر التالي'),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSoundSourceIdentificationGame() {
+    const List<Map<String, dynamic>> sounds = [
+      {
+        'soundText': 'مُوَاءٌ لَطِيفٌ: مِيَاوْ.. مِيَاوْ!',
+        'question': 'من صاحب هذا الصوت اللطيف الذي يحب شرب الحليب؟',
+        'correct': '🐱 القطة الأليفة',
+        'options': ['🐱 القطة الأليفة', '🦁 الأسد', '🚂 القطار'],
+      },
+      {
+        'soundText': 'زَئِيرٌ قَوِيٌّ فِي الغَابَةِ!',
+        'question': 'من صاحب صوت الزئير ويعيش في الغابة؟',
+        'correct': '🦁 الأسد الشجاع',
+        'options': ['🐦 العصفور', '🦁 الأسد الشجاع', '🐑 الخروف'],
+      },
+      {
+        'soundText': 'زَقْزَقَةٌ جَمِيلَةٌ فَوْقَ الشَّجَرَةِ: سِيو سِيو!',
+        'question': 'من الذي يغرد فوق أغصان الشجرة في الصباح؟',
+        'correct': '🐦 العصفور المغرد',
+        'options': ['🐦 العصفور المغرد', '🐘 الفيل', '🚗 السيارة'],
+      },
+      {
+        'soundText': 'طَنِينٌ هَادِئٌ بَيْنَ الأَزْهَارِ: ززززز!',
+        'question': 'من الحشرة النشيطة التي تصنع لنا العسل المفيد؟',
+        'correct': '🐝 النحلة النشيطة',
+        'options': ['🐢 السلحفاة', '🐝 النحلة النشيطة', '🐟 السمكة'],
+      },
+    ];
+    final current = sounds[_soundGameIndex % sounds.length];
+    final List<String> opts = List<String>.from(current['options'] as List);
+
+    return Container(
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1E293B),
+        borderRadius: BorderRadius.circular(22),
+        border: Border.all(color: const Color(0xFFF97316).withOpacity(0.6)),
+      ),
+      child: Column(
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Text(
+                '🔊 لعبة تمييز الأصوات ومصادرها',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+              ),
+              ElevatedButton.icon(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFFF97316),
+                  foregroundColor: Colors.white,
+                ),
+                onPressed: () {
+                  CalmVoiceService.instance.speakCalmly(
+                    '${current['soundText']} ${current['question']}',
+                    allowSpeechForRepeatGame: true,
+                  );
+                },
+                icon: const Icon(Icons.volume_up_rounded, size: 18),
+                label: const Text('استمع للصوت'),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: const Color(0xFF0F172A),
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: Column(
+              children: [
+                Text(
+                  current['soundText'] as String,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                    color: Color(0xFFFDE68A),
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  current['question'] as String,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(fontSize: 13, color: Colors.white70),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 14),
+          ...opts.map((opt) {
+            return Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: SizedBox(
+                width: double.infinity,
+                height: 46,
+                child: OutlinedButton(
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: Colors.white,
+                    side: const BorderSide(color: Color(0xFFF97316)),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(14)),
+                  ),
+                  onPressed: () async {
+                    if (opt == current['correct']) {
+                      await widget.appState.recordBrainGameWin(
+                        gameId: 'sound_id_${_soundGameIndex % sounds.length}',
+                        gameTitle: 'لعبة تمييز الأصوات',
+                        earnedIqPoints: 12,
+                        earnedStars: 1,
+                        learnedWord: opt,
+                      );
+                      setState(() {
+                        _soundGameFeedback = '✅ أحسنت الاستماع والتمييز! ($opt)';
+                      });
+                    } else {
+                      setState(() {
+                        _soundGameFeedback =
+                            '💡 اضغط «استمع للصوت» بالأعلى وجرب مرة أخرى بهدوء!';
+                      });
+                    }
+                  },
+                  child: Text(opt,
+                      style: const TextStyle(
+                          fontSize: 15, fontWeight: FontWeight.bold)),
+                ),
+              ),
+            );
+          }),
+          if (_soundGameFeedback != null) ...[
+            const SizedBox(height: 8),
+            Text(
+              _soundGameFeedback!,
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                  color: Color(0xFFFDE68A), fontWeight: FontWeight.bold),
+            ),
+          ],
+          const SizedBox(height: 10),
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton.icon(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFFF97316),
+                foregroundColor: Colors.white,
+              ),
+              onPressed: () {
+                setState(() {
+                  _soundGameIndex = (_soundGameIndex + 1) % sounds.length;
+                  _soundGameFeedback = null;
+                });
+              },
+              icon: const Icon(Icons.navigate_next),
+              label: const Text('الصوت التالي'),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildLogicalSequenceOrderingGame() {
+    const List<Map<String, dynamic>> sequences = [
+      {
+        'title': 'ترتيب خطوات غسل اليدين قبل الطعام',
+        'steps': [
+          '١. أفتح الصنبور وأبلل يديّ بالماء باعتدال 💧',
+          '٢. أضع الصابون وأفرك يديّ جيداً 🧼',
+          '٣. أغسل يديّ بالماء وأجففهما بالمنشفة النظيفة 🤲',
+        ],
+      },
+      {
+        'title': 'ترتيب خطوات الاستعداد للنوم الهادئ',
+        'steps': [
+          '١. أرتب ألعابي وأضعها في السلة 🧸',
+          '٢. أنظف أسناني بالفرشاة والمعجون 🪥',
+          '٣. أقرأ دعاء النوم وأغمض عينيّ بهدوء 🌙',
+        ],
+      },
+      {
+        'title': 'مراحل نمو النبتة الجميلة',
+        'steps': [
+          '١. نضع البذرة الصغيرة في التربة ونسقيها 🌱',
+          '٢. تكبر الساق والأوراق الخضراء مع ضوء الشمس 🌿',
+          '٣. تتفتح الزهرة الملونة الجميلة 🌸',
+        ],
+      },
+    ];
+    final current = sequences[_seqGameIndex % sequences.length];
+    final List<String> correctSteps =
+        List<String>.from(current['steps'] as List);
+    final List<int> displayOrder = [1, 2, 0];
+
+    return Container(
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1E293B),
+        borderRadius: BorderRadius.circular(22),
+        border: Border.all(color: const Color(0xFFEC4899).withOpacity(0.6)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            '🪜 ${current['title']}',
+            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+          ),
+          const SizedBox(height: 6),
+          const Text(
+            'اضغط على الخطوات بالترتيب الصحيح من الخطوة الأولى حتى الثالثة:',
+            style: TextStyle(fontSize: 12, color: Colors.white70),
+          ),
+          const SizedBox(height: 12),
+          ...displayOrder.map((stepIdx) {
+            final bool isPicked = _userSequenceOrder.contains(stepIdx);
+            final int pickedOrder = _userSequenceOrder.indexOf(stepIdx) + 1;
+            return Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: InkWell(
+                onTap: () async {
+                  if (isPicked) return;
+                  setState(() {
+                    _userSequenceOrder.add(stepIdx);
+                  });
+                  if (_userSequenceOrder.length == 3) {
+                    if (_userSequenceOrder[0] == 0 &&
+                        _userSequenceOrder[1] == 1 &&
+                        _userSequenceOrder[2] == 2) {
+                      await widget.appState.recordBrainGameWin(
+                        gameId: 'seq_${_seqGameIndex % sequences.length}',
+                        gameTitle: 'لعبة الترتيب المنطقي',
+                        earnedIqPoints: 15,
+                        earnedStars: 2,
+                      );
+                      setState(() {
+                        _seqGameFeedback =
+                            '✅ ترتيب منطقي سليم ١٠٠٪ يا بطل العادات الجميلة!';
+                      });
+                    } else {
+                      setState(() {
+                        _seqGameFeedback =
+                            '🔄 الترتيب يحتاج لإعادة محاولة؛ اضغط «إعادة الترتيب» وابدأ بالخطوة رقم (١).';
+                      });
+                    }
+                  }
+                },
+                child: Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: isPicked
+                        ? const Color(0xFF14B8A6).withOpacity(0.25)
+                        : const Color(0xFF0F172A),
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(
+                      color: isPicked
+                          ? const Color(0xFF14B8A6)
+                          : Colors.white24,
+                    ),
+                  ),
+                  child: Row(
+                    children: [
+                      CircleAvatar(
+                        radius: 14,
+                        backgroundColor: isPicked
+                            ? const Color(0xFF14B8A6)
+                            : Colors.white12,
+                        child: Text(
+                          isPicked ? '$pickedOrder' : '؟',
+                          style: const TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.white),
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          correctSteps[stepIdx],
+                          style: const TextStyle(fontSize: 13),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            );
+          }),
+          if (_seqGameFeedback != null) ...[
+            const SizedBox(height: 8),
+            Text(
+              _seqGameFeedback!,
+              style: const TextStyle(
+                  color: Color(0xFFFDE68A), fontWeight: FontWeight.bold),
+            ),
+          ],
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: () {
+                    setState(() {
+                      _userSequenceOrder.clear();
+                      _seqGameFeedback = null;
+                    });
+                  },
+                  icon: const Icon(Icons.refresh, size: 16),
+                  label: const Text('إعادة الترتيب'),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: ElevatedButton.icon(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFFEC4899),
+                    foregroundColor: Colors.white,
+                  ),
+                  onPressed: () {
+                    setState(() {
+                      _seqGameIndex = (_seqGameIndex + 1) % sequences.length;
+                      _userSequenceOrder.clear();
+                      _seqGameFeedback = null;
+                    });
+                  },
+                  icon: const Icon(Icons.navigate_next),
+                  label: const Text('التسلسل التالي'),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+}
+
+
+class AcademyTrackLessonModel {
+  final String id;
+  final String trackId;
+  final String trackTitle;
+  final String trackIcon;
+  final Color accentColor;
+  final String ageSuitability;
+  final String levelName;
+  final String title;
+  final String illustrationEmoji;
+  final String introductionText;
+  final String targetWordOrPhrase;
+  final String interactivePrompt;
+  final String quizQuestion;
+  final List<String> quizOptions;
+  final String correctOption;
+  final String rewardSticker;
+
+  const AcademyTrackLessonModel({
+    required this.id,
+    required this.trackId,
+    required this.trackTitle,
+    required this.trackIcon,
+    required this.accentColor,
+    required this.ageSuitability,
+    required this.levelName,
+    required this.title,
+    required this.illustrationEmoji,
+    required this.introductionText,
+    required this.targetWordOrPhrase,
+    required this.interactivePrompt,
+    required this.quizQuestion,
+    required this.quizOptions,
+    required this.correctOption,
+    required this.rewardSticker,
+  });
+}
+
+const List<AcademyTrackLessonModel> kHaneenAcademyCurriculum = [
+  AcademyTrackLessonModel(
+    id: 'les_arabic_alif',
+    trackId: 'arabic_letters',
+    trackTitle: '١. الحروف العربية',
+    trackIcon: '🔤',
+    accentColor: Color(0xFF14B8A6),
+    ageSuitability: '2–6 سنوات',
+    levelName: 'مبتدئ',
+    title: 'حرف الألف (أ) — أَسَدٌ وَأَرْنَبٌ',
+    illustrationEmoji: '🦁🐰',
+    introductionText:
+        'حرف الألف (أ) هو أول حروف لغتنا العربية الجميلة! نسمعه في أول كلمة (أَسَد) وكلمة (أَرْنَب).',
+    targetWordOrPhrase: 'أ — أَسَدٌ شُجَاعٌ ، أَرْنَبٌ سَرِيعٌ',
+    interactivePrompt: 'المس صورة الأرنب اللطيف وانطق حرف (أَ) بصوت واضح!',
+    quizQuestion: 'أي كلمة من هذه الكلمات تبدأ بحرف الألف (أ)؟',
+    quizOptions: ['أَرْنَبٌ 🐰', 'بَطَّةٌ 🦆', 'تُفَّاحَةٌ 🍎'],
+    correctOption: 'أَرْنَبٌ 🐰',
+    rewardSticker: '🌟 وسام حرف الألف',
+  ),
+  AcademyTrackLessonModel(
+    id: 'les_arabic_baa',
+    trackId: 'arabic_letters',
+    trackTitle: '١. الحروف العربية',
+    trackIcon: '🔤',
+    accentColor: Color(0xFF14B8A6),
+    ageSuitability: '2–6 سنوات',
+    levelName: 'مبتدئ',
+    title: 'حرف الباء (ب) — بَطَّةٌ وَبَيْتٌ',
+    illustrationEmoji: '🦆🏠',
+    introductionText:
+        'حرف الباء (ب) تحته نقطة واحدة جميلة! نسمعه في أول كلمة (بَطَّة) وكلمة (بَيْت).',
+    targetWordOrPhrase: 'ب — بَطَّةٌ تَسْبَحُ فِي المَاءِ',
+    interactivePrompt: 'ضع إصبعك تحت حرف الباء لتتذكر النقطة الواحدة!',
+    quizQuestion: 'أين توجد النقطة في حرف الباء (ب)؟',
+    quizOptions: ['تحت الحرف (ب)', 'فوق الحرف', 'بدون نقاط'],
+    correctOption: 'تحت الحرف (ب)',
+    rewardSticker: '🌟 وسام حرف الباء',
+  ),
+  AcademyTrackLessonModel(
+    id: 'les_numbers_count',
+    trackId: 'numbers_counting',
+    trackTitle: '٢. الأرقام والعدّ',
+    trackIcon: '🔢',
+    accentColor: Color(0xFF38BDF8),
+    ageSuitability: '2–6 سنوات',
+    levelName: 'مبتدئ',
+    title: 'الأرقام (١ ، ٢ ، ٣) والمقارنة بين الكميات',
+    illustrationEmoji: '🍎🍎🍎',
+    introductionText:
+        'هيا نعدّ التفاحات معاً: تفاحة واحدة (١)، تفاحتان اثنتان (٢)، ثلاث تفاحات (٣)! الثلاثة أكثر من الواحدة.',
+    targetWordOrPhrase: 'وَاحِدٌ (١) ، اِثْنَانِ (٢) ، ثَلَاثَةٌ (٣)',
+    interactivePrompt: 'عدّ على أصابع يدك من ١ إلى ٣!',
+    quizQuestion: 'أي سلة تحتوي على ثلاث (٣) تفاحات؟',
+    quizOptions: ['🍎', '🍎🍎', '🍎🍎🍎'],
+    correctOption: '🍎🍎🍎',
+    rewardSticker: '🔢 وسام العدّ الذكي',
+  ),
+  AcademyTrackLessonModel(
+    id: 'les_colors_shapes',
+    trackId: 'colors_shapes',
+    trackTitle: '٣. الألوان والأشكال',
+    trackIcon: '🎨',
+    accentColor: Color(0xFFF59E0B),
+    ageSuitability: '2–6 سنوات',
+    levelName: 'مبتدئ',
+    title: 'الألوان الأساسية والدائرة والمربع والمثلث',
+    illustrationEmoji: '🔴🟦🔺',
+    introductionText:
+        'الدائرة مستديرة مثل الشمس ☀️، والمربع له ٤ أضلاع متساوية 🟦، والمثلث له ٣ زوايا 🔺!',
+    targetWordOrPhrase: 'دَائِرَةٌ حَمْرَاءُ ، مُرَبَّعٌ أَزْرَقُ ، مُثَلَّثٌ أَصْفَرُ',
+    interactivePrompt: 'ارسم بإصبعك دائرة في الهواء!',
+    quizQuestion: 'ما الشكل الهندسي المستدير الذي يشبه قرص الشمس؟',
+    quizOptions: ['الدائرة 🔴', 'المربع 🟦', 'المثلث 🔺'],
+    correctOption: 'الدائرة 🔴',
+    rewardSticker: '🎨 وسام الأشكال والألوان',
+  ),
+  AcademyTrackLessonModel(
+    id: 'les_animals_nature',
+    trackId: 'animals_nature',
+    trackTitle: '٤. الحيوانات والطبيعة',
+    trackIcon: '🦁',
+    accentColor: Color(0xFF10B981),
+    ageSuitability: '3–6 سنوات',
+    levelName: 'متوسط',
+    title: 'الحيوانات وأصواتها وبيئاتها الطبيعية',
+    illustrationEmoji: '🦁🐬🐪',
+    introductionText:
+        'الأسد يعيش في الغابة، والدلفين يسبح في البحر، والجمل يصبر في الصحراء ويسمى سفينة الصحراء!',
+    targetWordOrPhrase: 'الجَمَلُ فِي الصَّحْرَاءِ ، وَالدُّلْفِينُ فِي البَحْرِ',
+    interactivePrompt: 'قلّد حركة موج البحر الهادئ بيديك!',
+    quizQuestion: 'أين يعيش ويسبح الدلفين الذكي 🐬؟',
+    quizOptions: ['في البحر الواسع 🌊', 'في الصحراء 🏜️', 'فوق الشجرة 🌳'],
+    correctOption: 'في البحر الواسع 🌊',
+    rewardSticker: '🌿 وسام مستكشف الطبيعة',
+  ),
+  AcademyTrackLessonModel(
+    id: 'les_vocab_words',
+    trackId: 'vocabulary',
+    trackTitle: '٥. الكلمات والمفردات',
+    trackIcon: '📚',
+    accentColor: Color(0xFFA855F7),
+    ageSuitability: '3–6 سنوات',
+    levelName: 'متوسط',
+    title: 'مفردات البيت والمدرسة والحديقة',
+    illustrationEmoji: '🏡🎒🌸',
+    introductionText:
+        'في الصباح نرتدي الحقيبة المدرسية (حَقِيبَة)، ونقرأ في (كِتَاب)، ونكتب بـ (قَلَم)!',
+    targetWordOrPhrase: 'كِتَابٌ مُفِيدٌ ، قَلَمٌ جَمِيلٌ ، حَدِيقَةٌ خَضْرَاءُ',
+    interactivePrompt: 'سمِّ ٣ أشياء جميلة تراها الآن في غرفتك!',
+    quizQuestion: 'ماذا نستخدم لنكتب ونرسم على الورقة؟',
+    quizOptions: ['القَلَم ✏️', 'الكُرَة ⚽', 'المِلْعَقَة 🥄'],
+    correctOption: 'القَلَم ✏️',
+    rewardSticker: '📚 وسام حصيلة المفردات',
+  ),
+  AcademyTrackLessonModel(
+    id: 'les_communication',
+    trackId: 'communication',
+    trackTitle: '٦. اللغة والتواصل',
+    trackIcon: '🗣️',
+    accentColor: Color(0xFFEC4899),
+    ageSuitability: '3–9 سنوات',
+    levelName: 'متوسط',
+    title: 'تكوين جمل مهذبة للتواصل اليومي',
+    illustrationEmoji: '🤝💬',
+    introductionText:
+        'عندما نطلب شيئاً نقول بلطف: «مِنْ فَضْلِكَ»، وعندما يساعدنا أحد نقول: «شُكْرًا لَكَ»، وعند الاستئذان نقول: «هَلْ تَسْمَحُ لِي؟».',
+    targetWordOrPhrase: 'مِنْ فَضْلِكَ يَا أُمِّي ، شُكْرًا لَكَ يَا أَبِي',
+    interactivePrompt: 'انطق جملة الشكر بصوت دافئ وابتسامة!',
+    quizQuestion: 'ماذا نقول لمن يقدم لنا هدية أو مساعدة؟',
+    quizOptions: ['شُكْرًا لَكَ 🌟', 'أعطني بسرعة', 'لا أتكلم'],
+    correctOption: 'شُكْرًا لَكَ 🌟',
+    rewardSticker: '🗣️ وسام المتحدث الفصيح',
+  ),
+  AcademyTrackLessonModel(
+    id: 'les_simple_science',
+    trackId: 'simple_science',
+    trackTitle: '٧. العلوم المبسطة',
+    trackIcon: '🔬',
+    accentColor: Color(0xFF06B6D4),
+    ageSuitability: '4–9 سنوات',
+    levelName: 'متقدم',
+    title: 'الحواس الخمس والطقس ونمو النباتات',
+    illustrationEmoji: '👀👂👃👅🖐️',
+    introductionText:
+        'خلق الله لنا خمس حواس رائعة: نرى بالعينين 👀، ونسمع بالأذنين 👂، ونشم بالأنف 👃، ونتذوق باللسان 👅، ونلمس باليدين 🖐️!',
+    targetWordOrPhrase: 'أَرَى بِعَيْنِي ، وَأَسْمَعُ بِأُذُنِي ، وَأَشُمُّ بِأَنْفِي',
+    interactivePrompt: 'أغمض عينيك ثانية واحدة واستمع لأصوات الغرفة بهدوء!',
+    quizQuestion: 'بأي حاسة نشمّ رائحة الأزهار الذكية 🌸؟',
+    quizOptions: ['بحاسة الشم (الأنف 👃)', 'بالأذن 👂', 'بالقدم 🦶'],
+    correctOption: 'بحاسة الشم (الأنف 👃)',
+    rewardSticker: '🔬 وسام العالم الصغير',
+  ),
+  AcademyTrackLessonModel(
+    id: 'les_social_skills',
+    trackId: 'social_skills',
+    trackTitle: '٨. المهارات الاجتماعية',
+    trackIcon: '❤️',
+    accentColor: Color(0xFFF43F5E),
+    ageSuitability: '3–9 سنوات',
+    levelName: 'متوسط',
+    title: 'المشاركة واللطف والتعبير عن المشاعر بهدوء',
+    illustrationEmoji: '🤗🎁',
+    introductionText:
+        'عندما نشارك ألعابنا مع إخوتنا وأصدقائنا تتضاعف الفرحة! وإذا شعرنا بالحزن أو الغضب نتنفس بعمق ونعبّر بالكلام الهادئ.',
+    targetWordOrPhrase: 'أَنَا أُشَارِكُ أَلْعَابِي وَأَتَحَدَّثُ بِلُطْفٍ',
+    interactivePrompt: 'ابتسم الآن ابتسامة الصديق المتعاون!',
+    quizQuestion: 'إذا أراد أخوك الصغير اللعب معك بالمكعبات، ماذا تفعل؟',
+    quizOptions: [
+      'أشاركه اللعب بلطف 🤝',
+      'أخفي كل الألعاب وحدي',
+      'أصرخ بصوت عالٍ',
+    ],
+    correctOption: 'أشاركه اللعب بلطف 🤝',
+    rewardSticker: '❤️ وسام القلب الطيب',
+  ),
+  AcademyTrackLessonModel(
+    id: 'les_daily_habits',
+    trackId: 'daily_habits',
+    trackTitle: '٩. العادات اليومية',
+    trackIcon: '🪥',
+    accentColor: Color(0xFF8B5CF6),
+    ageSuitability: '2–9 سنوات',
+    levelName: 'مبتدئ',
+    title: 'النظافة وترتيب الغرفة والاستعداد للنوم',
+    illustrationEmoji: '🧼🧸🌙',
+    introductionText:
+        'البطل المنظم يغسل يديه قبل الأكل وبعده، ويعيد ألعابه إلى السلة بعد اللعب، وينظف أسنانه قبل النوم المبكر!',
+    targetWordOrPhrase: 'نَظَافَتِي وَتَرْتِيبِي سِرُّ صِحَّتِي وَنَشَاطِي',
+    interactivePrompt: 'تعهّد بترتيب سريرك وألعابك كل يوم!',
+    quizQuestion: 'متى نعيد الألعاب إلى سلتها المخصصة 🧸؟',
+    quizOptions: [
+      'فور الانتهاء من اللعب ✅',
+      'نتركها مبعثرة على الأرض',
+      'لا نرتبها أبداً',
+    ],
+    correctOption: 'فور الانتهاء من اللعب ✅',
+    rewardSticker: '🪥 وسام البطل المنظم',
+  ),
+];
+
+class InteractiveEducationalStoryModel {
+  final String id;
+  final String categoryBadge;
+  final String ageGroup;
+  final String title;
+  final String illustration;
+  final String partOneText;
+  final String choicePrompt;
+  final String optionAText;
+  final String optionAOutcome;
+  final String optionBText;
+  final String optionBOutcome;
+  final String quizQuestion;
+  final List<String> quizOptions;
+  final String correctQuizAnswer;
+  final String moralSummary;
+
+  const InteractiveEducationalStoryModel({
+    required this.id,
+    required this.categoryBadge,
+    required this.ageGroup,
+    required this.title,
+    required this.illustration,
+    required this.partOneText,
+    required this.choicePrompt,
+    required this.optionAText,
+    required this.optionAOutcome,
+    required this.optionBText,
+    required this.optionBOutcome,
+    required this.quizQuestion,
+    required this.quizOptions,
+    required this.correctQuizAnswer,
+    required this.moralSummary,
+  });
+}
+
+const List<InteractiveEducationalStoryModel> kInteractiveOriginalStories = [
+  InteractiveEducationalStoryModel(
+    id: 'story_moon_rabbit',
+    categoryBadge: '🌙 قصة قبل النوم',
+    ageGroup: '2–6 سنوات',
+    title: 'الأرنب الأبيض ونجمة المساء الهادئة',
+    illustration: '🐰🌙✨',
+    partOneText:
+        'في المساء الهادئ، نظر الأرنب الصغير «سمسم» من نافذة غرفته فرأى نجمة لامعة في السماء تبتسم له وتقول: حان وقت الراحة يا سمسم ليستيقظ جسمك قوياً في الصباح.',
+    choicePrompt: 'ماذا يختار الأرنب سمسم أن يفعل قبل أن ينام؟',
+    optionAText: '(أ) يرتب لعبته وينظف أسنانه ويقرأ دعاء النوم 🪥🌙',
+    optionAOutcome:
+        'اختيار رائع! شعر سمسم بالنظافة والراحة، ونام نوماً هادئاً وجميلاً ورأى أحلاماً سعيدة في البستان الأخضر.',
+    optionBText: '(ب) يتنفس ٣ أنفاس عميقة ويستمع لصوت الليل الهادئ 🧘✨',
+    optionBOutcome:
+        'اختيار لطيف! هدأ قلب سمسم تماماً، وأغمض عينيه بابتسامة مطمئنة حتى الصباح المشرق.',
+    quizQuestion: 'ماذا تعلمنا من قصة الأرنب سمسم قبل النوم؟',
+    quizOptions: [
+      'الاستعداد الهادئ للنوم المبكر 🌙',
+      'السهر الطويل المرهق',
+      'اللعب الصاخب ليلاً',
+    ],
+    correctQuizAnswer: 'الاستعداد الهادئ للنوم المبكر 🌙',
+    moralSummary: 'النوم المبكر والهادئ يمنح الجسم والعقل صحة وذكاءً ونشاطاً.',
+  ),
+  InteractiveEducationalStoryModel(
+    id: 'story_honest_bird',
+    categoryBadge: '❤️ أخلاق وسلوكيات',
+    ageGroup: '3–9 سنوات',
+    title: 'العصفور الصادق وحبة القمح الذهبية',
+    illustration: '🐦🌾🤝',
+    partOneText:
+        'وجد العصفور الصغير «ريشة» حبة قمح كبيرة سقطت من سلة جارته السنجابة «بندقة» وهي عائدة إلى شجرتها.',
+    choicePrompt: 'كيف يتصرف العصفور الأمين «ريشة» الآن؟',
+    optionAText: '(أ) يطير فوراً إلى السنجابة بندقة ويعيد إليها حبة القمح 🤝',
+    optionAOutcome:
+        'ما أجمل الأمانة! فرحت السنجابة بندقة جداً بأمانة العصفور ريشة، وأهدته نصف الحبة ليأكلاها معاً بمحبة!',
+    optionBText: '(ب) ينادي أصدقاءه في الغابة ليساعدوا السنجابة في حمل سلتها 🐿️',
+    optionBOutcome:
+        'تعاون نبيل! شكر الجميع العصفور ريشة على أمانته وحبه لمساعدة جيرانه.',
+    quizQuestion: 'ما الخلق الجميل الذي تحلى به العصفور ريشة؟',
+    quizOptions: [
+      'الأمانة والتعاون مع الجيران 🤝',
+      'الأنانية',
+      'إهمال الآخرين',
+    ],
+    correctQuizAnswer: 'الأمانة والتعاون مع الجيران 🤝',
+    moralSummary: 'الأمانة والصدق والمشاركة تجعل الجميع يحبوننا ويثقون بنا.',
+  ),
+  InteractiveEducationalStoryModel(
+    id: 'story_letters_garden',
+    categoryBadge: '🔤 تعلم الكلمات والحروف',
+    ageGroup: '3–9 سنوات',
+    title: 'رحلة فارس ونور في بستان الحروف العربية',
+    illustration: '🌳📖🦋',
+    partOneText:
+        'دخل فارس وأخته نور بستاناً جميلاً، فوجدا ثلاث لافتات مضيئة مكتوباً عليها كلمات عربية فصيحة: (شَمْسٌ ☀️) و(قَمَرٌ 🌙) و(نَجْمَةٌ ⭐).',
+    choicePrompt: 'أي لافتة يختار فارس ونور قراءتها أولاً؟',
+    optionAText: '(أ) لافتة (شَمْسٌ مُشْرِقَةٌ) التي تبدأ بحرف الشين ☀️',
+    optionAOutcome:
+        'أشرق البستان بالضوء الدافئ، وتعلّم فارس ونور أن كلمة (شَمْس) تبدأ بحرف الشين (ش) ذي الثلاث نقاط!',
+    optionBText: '(ب) لافتة (قَمَرٌ مُنِيرٌ) التي تبدأ بحرف القاف 🌙',
+    optionBOutcome:
+        'تلألأ نور القمر اللطيف، وتعلّم فارس ونور أن كلمة (قَمَر) تبدأ بحرف القاف (ق) الفصيح!',
+    quizQuestion: 'بأي حرف تبدأ كلمة (شَمْسٌ)؟',
+    quizOptions: ['بحرف الشين (ش) ☀️', 'بحرف الباء (ب)', 'بحرف الميم (م)'],
+    correctQuizAnswer: 'بحرف الشين (ش) ☀️',
+    moralSummary: 'قراءة الكلمات العربية الفصحى تزيدنا ذكاءً وفصاحة وجمالاً.',
+  ),
+];
+
+class HaneenAcademyScreen extends StatefulWidget {
+  final AppStateManager appState;
+  final int initialTabIndex;
+
+  const HaneenAcademyScreen({
+    super.key,
+    required this.appState,
+    this.initialTabIndex = 0,
+  });
+
+  @override
+  State<HaneenAcademyScreen> createState() => _HaneenAcademyScreenState();
+}
+
+class _HaneenAcademyScreenState extends State<HaneenAcademyScreen>
+    with SingleTickerProviderStateMixin {
+  late TabController _tabController;
+  String _selectedTrackFilter = 'all';
+  bool _nightStoryMode = false;
+  double _storySpeechRate = 0.35;
+  final Map<String, String> _selectedLessonQuizOption = {};
+  final Map<String, String> _selectedStoryBranch = {};
+  final Map<String, String> _selectedStoryQuizOption = {};
+
+  @override
+  void initState() {
+    super.initState();
+    _tabController = TabController(
+      length: 3,
+      vsync: this,
+      initialIndex: widget.initialTabIndex.clamp(0, 2),
+    );
+    widget.appState.logChildRealtimeActivity(
+      statusSummary: '🎓 يتعلم داخل أكاديمية حنين التعليمية والقصص التفاعلية',
+      actionLogText: 'فتح أكاديمية حنين التعليمية',
+      categoryBadge: 'أكاديمية حنين',
+    );
+  }
+
+  @override
+  void dispose() {
+    _tabController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: widget.appState,
+      builder: (context, _) {
+        final child = widget.appState.currentAccount?.activeChild;
+        if (child == null) return const SizedBox.shrink();
+
+        return Scaffold(
+          backgroundColor:
+              _nightStoryMode ? const Color(0xFF090D16) : const Color(0xFF0F172A),
+          appBar: AppBar(
+            backgroundColor: const Color(0xFF1E293B),
+            title: Text(
+              '🎓 أكاديمية حنين التعليمية (${child.name})',
+              style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
+            ),
+            actions: [
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 10),
+                child: Center(
+                  child: Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFF59E0B).withOpacity(0.2),
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(color: const Color(0xFFF59E0B)),
+                    ),
+                    child: Text(
+                      '⭐ ${child.starsEarned} | 🎓 ${child.completedLessons.length}',
+                      style: const TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.bold,
+                        color: Color(0xFFFDE68A),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+            bottom: TabBar(
+              controller: _tabController,
+              indicatorColor: const Color(0xFF14B8A6),
+              labelColor: const Color(0xFF14B8A6),
+              unselectedLabelColor: Colors.white70,
+              tabs: const [
+                Tab(icon: Icon(Icons.school_rounded), text: 'المسارات الـ ٩'),
+                Tab(
+                    icon: Icon(Icons.auto_stories_rounded),
+                    text: 'القصص التفاعلية'),
+                Tab(
+                    icon: Icon(Icons.emoji_events_rounded),
+                    text: 'خريطة النجوم والمكافآت'),
+              ],
+            ),
+          ),
+          body: TabBarView(
+            controller: _tabController,
+            children: [
+              _buildNineEducationalTracksTab(child),
+              _buildInteractiveStoriesTab(child),
+              _buildStarsWorldAndAchievementsTab(child),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildNineEducationalTracksTab(ChildProfile child) {
+    final List<Map<String, String>> trackFilters = [
+      {'id': 'all', 'label': '🌟 كل المسارات (٩)'},
+      {'id': 'arabic_letters', 'label': '🔤 الحروف العربية'},
+      {'id': 'numbers_counting', 'label': '🔢 الأرقام والعد'},
+      {'id': 'colors_shapes', 'label': '🎨 الألوان والأشكال'},
+      {'id': 'animals_nature', 'label': '🦁 الحيوانات والطبيعة'},
+      {'id': 'vocabulary', 'label': '📚 الكلمات والمفردات'},
+      {'id': 'communication', 'label': '🗣️ اللغة والتواصل'},
+      {'id': 'simple_science', 'label': '🔬 العلوم المبسطة'},
+      {'id': 'social_skills', 'label': '❤️ المهارات الاجتماعية'},
+      {'id': 'daily_habits', 'label': '🪥 العادات اليومية'},
+    ];
+
+    final filteredLessons = _selectedTrackFilter == 'all'
+        ? kHaneenAcademyCurriculum
+        : kHaneenAcademyCurriculum
+            .where((l) => l.trackId == _selectedTrackFilter)
+            .toList();
+
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(12, 10, 12, 4),
+          child: CuteSuperheroCompanionBanner(
+            appState: widget.appState,
+            compactMode: true,
+          ),
+        ),
+        SizedBox(
+          height: 40,
+          child: ListView.builder(
+            scrollDirection: Axis.horizontal,
+            padding: const EdgeInsets.symmetric(horizontal: 10),
+            itemCount: trackFilters.length,
+            itemBuilder: (ctx, i) {
+              final tf = trackFilters[i];
+              final bool isSel = _selectedTrackFilter == tf['id'];
+              return GestureDetector(
+                onTap: () => setState(() => _selectedTrackFilter = tf['id']!),
+                child: Container(
+                  margin:
+                      const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: isSel
+                        ? const Color(0xFF14B8A6)
+                        : const Color(0xFF1E293B),
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(
+                      color:
+                          isSel ? const Color(0xFF14B8A6) : Colors.white24,
+                    ),
+                  ),
+                  child: Center(
+                    child: Text(
+                      tf['label']!,
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight:
+                            isSel ? FontWeight.bold : FontWeight.normal,
+                        color: Colors.white,
+                      ),
+                    ),
+                  ),
+                ),
+              );
+            },
+          ),
+        ),
+        Expanded(
+          child: ListView.builder(
+            padding: const EdgeInsets.all(14),
+            itemCount: filteredLessons.length,
+            itemBuilder: (ctx, i) {
+              final lesson = filteredLessons[i];
+              final bool isDone = child.completedLessons.contains(lesson.id);
+              final String? chosenOpt = _selectedLessonQuizOption[lesson.id];
+              final bool isQuizCorrect = chosenOpt == lesson.correctOption;
+
+              return Container(
+                margin: const EdgeInsets.only(bottom: 16),
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF1E293B),
+                  borderRadius: BorderRadius.circular(22),
+                  border: Border.all(
+                    color: isDone
+                        ? const Color(0xFF10B981)
+                        : lesson.accentColor.withOpacity(0.6),
+                    width: isDone ? 2.0 : 1.2,
+                  ),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.all(10),
+                          decoration: BoxDecoration(
+                            color: lesson.accentColor.withOpacity(0.2),
+                            shape: BoxShape.circle,
+                          ),
+                          child: Text(lesson.illustrationEmoji,
+                              style: const TextStyle(fontSize: 28)),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                '${lesson.trackTitle} • ${lesson.ageSuitability}',
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.bold,
+                                  color: lesson.accentColor,
+                                ),
+                              ),
+                              const SizedBox(height: 2),
+                              Text(
+                                lesson.title,
+                                style: const TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.bold,
+                                  color: Colors.white,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        if (isDone)
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 8, vertical: 4),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF10B981).withOpacity(0.2),
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: const Text(
+                              '✅ مكتمل',
+                              style: TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.bold,
+                                color: Color(0xFFA7F3D0),
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
+                    const SizedBox(height: 10),
+                    Text(
+                      lesson.introductionText,
+                      style: const TextStyle(
+                          fontSize: 13.5, height: 1.5, color: Colors.white),
+                    ),
+                    const SizedBox(height: 10),
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF0F172A),
+                        borderRadius: BorderRadius.circular(14),
+                        border:
+                            Border.all(color: lesson.accentColor.withOpacity(0.5)),
+                      ),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  '🗣️ الكلمة / العبارة المستهدفة:',
+                                  style: TextStyle(
+                                      fontSize: 11, color: lesson.accentColor),
+                                ),
+                                const SizedBox(height: 4),
+                                Text(
+                                  lesson.targetWordOrPhrase,
+                                  style: const TextStyle(
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.bold,
+                                    color: Color(0xFFFDE68A),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          ElevatedButton.icon(
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: lesson.accentColor,
+                              foregroundColor: Colors.white,
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 10, vertical: 8),
+                            ),
+                            onPressed: () {
+                              CalmVoiceService.instance.speakCalmly(
+                                '${lesson.title}. ${lesson.targetWordOrPhrase}',
+                                rate: 0.34,
+                                allowSpeechForRepeatGame: true,
+                              );
+                            },
+                            icon: const Icon(Icons.volume_up_rounded, size: 18),
+                            label: const Text('استمع للنطق',
+                                style: TextStyle(fontSize: 12)),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      '🎯 نشاط الدرس: ${lesson.interactivePrompt}',
+                      style: const TextStyle(
+                          fontSize: 12, color: Color(0xFFBAE6FD)),
+                    ),
+                    const Divider(color: Colors.white12, height: 20),
+                    Text(
+                      '❓ سؤال قصير: ${lesson.quizQuestion}',
+                      style: const TextStyle(
+                        fontSize: 13.5,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.white,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: lesson.quizOptions.map((opt) {
+                        final bool isSelected = chosenOpt == opt;
+                        final bool isOptRight = opt == lesson.correctOption;
+                        return ChoiceChip(
+                          selected: isSelected,
+                          selectedColor: isOptRight
+                              ? const Color(0xFF10B981)
+                              : const Color(0xFFF59E0B),
+                          backgroundColor: const Color(0xFF0F172A),
+                          label: Text(
+                            opt,
+                            style: const TextStyle(
+                                color: Colors.white, fontSize: 12.5),
+                          ),
+                          onSelected: (_) async {
+                            setState(() {
+                              _selectedLessonQuizOption[lesson.id] = opt;
+                            });
+                            if (isOptRight) {
+                              final isNew = await widget.appState
+                                  .completeAcademyLesson(
+                                lessonId: lesson.id,
+                                lessonTitle: lesson.title,
+                                learnedWord: lesson.targetWordOrPhrase,
+                                rewardStars: 2,
+                              );
+                              if (mounted) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(
+                                    content: Text(
+                                      isNew
+                                          ? '🎉 أحسنت يا بطل! حصلت على ${lesson.rewardSticker} (+2 نجمة ⭐)'
+                                          : '✅ إجابة صحيحة! أحسنت مراجعة الدرس!',
+                                    ),
+                                    backgroundColor: const Color(0xFF10B981),
+                                  ),
+                                );
+                              }
+                            }
+                          },
+                        );
+                      }).toList(),
+                    ),
+                    if (chosenOpt != null && !isQuizCorrect) ...[
+                      const SizedBox(height: 6),
+                      const Text(
+                        '💡 تلميح لطيف: استمع للنطق مرة أخرى بالأعلى وجرب الإجابة الأخرى بهدوء!',
+                        style:
+                            TextStyle(fontSize: 12, color: Color(0xFFFDE68A)),
+                      ),
+                    ],
+                  ],
+                ),
+              );
+            },
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildInteractiveStoriesTab(ChildProfile child) {
+    return ListView(
+      padding: const EdgeInsets.all(14),
+      children: [
+        Container(
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: const Color(0xFF1E293B),
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(color: Colors.white12),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const Expanded(
+                    child: Text(
+                      '🌙 إعدادات القراءة الهادئة والوضع الليلي للقصص',
+                      style:
+                          TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
+                    ),
+                  ),
+                  Switch(
+                    value: _nightStoryMode,
+                    activeColor: const Color(0xFFF59E0B),
+                    onChanged: (v) => setState(() => _nightStoryMode = v),
+                  ),
+                ],
+              ),
+              Row(
+                children: [
+                  const Text('سرعة القراءة الصوتية الاختيارية:',
+                      style: TextStyle(fontSize: 12, color: Colors.white70)),
+                  Expanded(
+                    child: Slider(
+                      value: _storySpeechRate,
+                      min: 0.25,
+                      max: 0.50,
+                      divisions: 5,
+                      activeColor: const Color(0xFF14B8A6),
+                      label: _storySpeechRate <= 0.32 ? 'هادئة جداً' : 'معتدلة',
+                      onChanged: (v) => setState(() => _storySpeechRate = v),
+                    ),
+                  ),
+                  TextButton.icon(
+                    onPressed: () => CalmVoiceService.instance.stopSpeaking(),
+                    icon: const Icon(Icons.stop_circle_outlined,
+                        size: 16, color: Colors.redAccent),
+                    label: const Text('إيقاف الصوت',
+                        style:
+                            TextStyle(fontSize: 11, color: Colors.redAccent)),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 14),
+        ...kInteractiveOriginalStories.map((story) {
+          final bool isFav = child.favoriteStoryIds.contains(story.id);
+          final String? chosenBranch = _selectedStoryBranch[story.id];
+          final String? chosenQuiz = _selectedStoryQuizOption[story.id];
+
+          return Container(
+            margin: const EdgeInsets.only(bottom: 16),
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: _nightStoryMode
+                  ? const Color(0xFF111827)
+                  : const Color(0xFF1E293B),
+              borderRadius: BorderRadius.circular(22),
+              border: Border.all(
+                color: isFav
+                    ? const Color(0xFFF59E0B)
+                    : const Color(0xFF14B8A6).withOpacity(0.5),
+              ),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Text(story.illustration,
+                        style: const TextStyle(fontSize: 34)),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            '${story.categoryBadge} • ${story.ageGroup}',
+                            style: const TextStyle(
+                                fontSize: 11, color: Color(0xFF38BDF8)),
+                          ),
+                          Text(
+                            story.title,
+                            style: const TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.white,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    IconButton(
+                      tooltip: 'إضافة للمفضلة',
+                      onPressed: () => widget.appState
+                          .toggleFavoriteInteractiveStory(story.id),
+                      icon: Icon(
+                        isFav ? Icons.bookmark : Icons.bookmark_border,
+                        color: isFav ? const Color(0xFFF59E0B) : Colors.white70,
+                      ),
+                    ),
+                    IconButton(
+                      tooltip: 'استمع للقصة بصوت هادئ (اختياري)',
+                      onPressed: () {
+                        CalmVoiceService.instance.speakCalmly(
+                          '${story.title}. ${story.partOneText}',
+                          rate: _storySpeechRate,
+                          allowSpeechForRepeatGame: true,
+                        );
+                      },
+                      icon: const Icon(Icons.volume_up_rounded,
+                          color: Color(0xFF14B8A6)),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                Text(
+                  story.partOneText,
+                  style: TextStyle(
+                    fontSize: 14,
+                    height: 1.6,
+                    color: _nightStoryMode
+                        ? const Color(0xFFE5E7EB)
+                        : Colors.white,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  '🔀 اختر مجرى أحداث القصة: ${story.choicePrompt}',
+                  style: const TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.bold,
+                    color: Color(0xFFFDE68A),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                OutlinedButton(
+                  style: OutlinedButton.styleFrom(
+                    backgroundColor: chosenBranch == 'A'
+                        ? const Color(0xFF14B8A6).withOpacity(0.25)
+                        : null,
+                    foregroundColor: Colors.white,
+                    side: const BorderSide(color: Color(0xFF14B8A6)),
+                  ),
+                  onPressed: () =>
+                      setState(() => _selectedStoryBranch[story.id] = 'A'),
+                  child: Align(
+                    alignment: Alignment.centerRight,
+                    child: Text(story.optionAText,
+                        style: const TextStyle(fontSize: 12.5)),
+                  ),
+                ),
+                const SizedBox(height: 6),
+                OutlinedButton(
+                  style: OutlinedButton.styleFrom(
+                    backgroundColor: chosenBranch == 'B'
+                        ? const Color(0xFF38BDF8).withOpacity(0.25)
+                        : null,
+                    foregroundColor: Colors.white,
+                    side: const BorderSide(color: Color(0xFF38BDF8)),
+                  ),
+                  onPressed: () =>
+                      setState(() => _selectedStoryBranch[story.id] = 'B'),
+                  child: Align(
+                    alignment: Alignment.centerRight,
+                    child: Text(story.optionBText,
+                        style: const TextStyle(fontSize: 12.5)),
+                  ),
+                ),
+                if (chosenBranch != null) ...[
+                  const SizedBox(height: 10),
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF0F172A),
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(color: const Color(0xFF10B981)),
+                    ),
+                    child: Text(
+                      chosenBranch == 'A'
+                          ? story.optionAOutcome
+                          : story.optionBOutcome,
+                      style: const TextStyle(
+                          fontSize: 13, height: 1.5, color: Color(0xFFA7F3D0)),
+                    ),
+                  ),
+                ],
+                const Divider(color: Colors.white12, height: 20),
+                Text(
+                  '❓ سؤال القصة: ${story.quizQuestion}',
+                  style: const TextStyle(
+                      fontSize: 13, fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: story.quizOptions.map((opt) {
+                    final bool isSel = chosenQuiz == opt;
+                    final bool isRight = opt == story.correctQuizAnswer;
+                    return ChoiceChip(
+                      selected: isSel,
+                      selectedColor: isRight
+                          ? const Color(0xFF10B981)
+                          : const Color(0xFFF59E0B),
+                      backgroundColor: const Color(0xFF0F172A),
+                      label: Text(opt,
+                          style: const TextStyle(
+                              fontSize: 12, color: Colors.white)),
+                      onSelected: (_) async {
+                        setState(() {
+                          _selectedStoryQuizOption[story.id] = opt;
+                        });
+                        if (isRight) {
+                          await widget.appState.awardStarAndRecordActivity(
+                            'story_quiz_${story.id}',
+                            practicedWord: story.title,
+                          );
+                        }
+                      },
+                    );
+                  }).toList(),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  '💡 الحكمة التربوية: ${story.moralSummary}',
+                  style:
+                      const TextStyle(fontSize: 11.5, color: Colors.white70),
+                ),
+              ],
+            ),
+          );
+        }),
+      ],
+    );
+  }
+
+  Widget _buildStarsWorldAndAchievementsTab(ChildProfile child) {
+    final List<Map<String, dynamic>> worldIslands = [
+      {
+        'title': '١. جزيرة الحروف والأصوات 🏝️🔤',
+        'requiredLessons': 0,
+        'desc': 'مفتوحة لجميع الأبطال! تعلم الحروف العربية والكلمات.',
+      },
+      {
+        'title': '٢. واحة الأرقام والألوان 🌈🔢',
+        'requiredLessons': 2,
+        'desc': 'تُفتح عند إكمال درسين في الأكاديمية.',
+      },
+      {
+        'title': '٣. غابة الطبيعة والعلوم 🦋🔬',
+        'requiredLessons': 4,
+        'desc': 'تُفتح عند إكمال ٤ دروس في الأكاديمية.',
+      },
+      {
+        'title': '٤. قلعة الأخلاق والعادات الجميلة 🏰🌟',
+        'requiredLessons': 6,
+        'desc': 'تُفتح عند إكمال ٦ دروس في الأكاديمية.',
+      },
+    ];
+
+    final List<Map<String, String>> achievementsCatalog = [
+      {
+        'id': 'first_lesson',
+        'icon': '🎓',
+        'title': 'وسام أول درس',
+        'desc': 'أكمل درسه الأول في أكاديمية حنين',
+      },
+      {
+        'id': 'five_lessons',
+        'icon': '🏅',
+        'title': 'باحث المعرفة (٥ دروس)',
+        'desc': 'أتم ٥ دروس تعليمية تفاعلية',
+      },
+      {
+        'id': 'vocab_explorer',
+        'icon': '📚',
+        'title': 'بطل الكلمات الفصيحة',
+        'desc': 'تعلّم وتدرب على ٥ مفردات عربية جديدة',
+      },
+      {
+        'id': 'games_champion',
+        'icon': '🧠',
+        'title': 'بطل ألعاب التفكير',
+        'desc': 'أنجز ٥ تحديات في مركز الألعاب التعليمية',
+      },
+      {
+        'id': 'star_collector_15',
+        'icon': '🌟',
+        'title': 'جامع النجوم المضيئة',
+        'desc': 'جمع ١٥ نجمة تشجيعية بدون أي عقوبات',
+      },
+      {
+        'id': 'clear_speaker',
+        'icon': '🗣️',
+        'title': 'صديق الفصاحة والاستماع',
+        'desc': 'شارك في ٣ تدريبات استماع وتكرار',
+      },
+    ];
+
+    final List<Map<String, dynamic>> cosmeticsShop = [
+      {
+        'id': 'hero_crown_basic',
+        'icon': '👑',
+        'title': 'تاج البطل الذهبي',
+        'cost': 0,
+      },
+      {
+        'id': 'space_cape_cosmetic',
+        'icon': '🚀',
+        'title': 'وشاح الفضاء اللامع',
+        'cost': 3,
+      },
+      {
+        'id': 'butterfly_wings_sticker',
+        'icon': '🦋',
+        'title': 'ملصق أجنحة الطبيعة',
+        'cost': 5,
+      },
+      {
+        'id': 'scientist_glasses',
+        'icon': '🥽',
+        'title': 'نظارة العالم الصغير',
+        'cost': 7,
+      },
+    ];
+
+    return ListView(
+      padding: const EdgeInsets.all(14),
+      children: [
+        Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            gradient: const LinearGradient(
+              colors: [Color(0xFF134E4A), Color(0xFF1E293B)],
+            ),
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(color: const Color(0xFF14B8A6)),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                '🗺️ خريطة عالم حنين التعليمي (${child.name})',
+                style: const TextStyle(
+                    fontSize: 16, fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 4),
+              const Text(
+                'تقدمك محفوظ دائماً! لا تقلق أبداً، فنجومك وأوسمتك لا تنقص إذا غبت عن التطبيق.',
+                style: TextStyle(fontSize: 12, color: Colors.white70),
+              ),
+              const SizedBox(height: 12),
+              ...worldIslands.map((isl) {
+                final int req = isl['requiredLessons'] as int;
+                final bool unlocked = child.completedLessons.length >= req;
+                return Container(
+                  margin: const EdgeInsets.only(bottom: 8),
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: unlocked
+                        ? const Color(0xFF0F172A)
+                        : Colors.black26,
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(
+                      color: unlocked
+                          ? const Color(0xFF10B981)
+                          : Colors.white12,
+                    ),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(
+                        unlocked ? Icons.lock_open_rounded : Icons.lock_outline,
+                        color: unlocked
+                            ? const Color(0xFF10B981)
+                            : Colors.white38,
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              isl['title'] as String,
+                              style: TextStyle(
+                                fontWeight: FontWeight.bold,
+                                color:
+                                    unlocked ? Colors.white : Colors.white54,
+                              ),
+                            ),
+                            Text(
+                              isl['desc'] as String,
+                              style: const TextStyle(
+                                  fontSize: 11.5, color: Colors.white60),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+              }),
+            ],
+          ),
+        ),
+        const SizedBox(height: 16),
+        const Text(
+          '🏅 أوسمة الإنجازات المحفوظة:',
+          style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+        ),
+        const SizedBox(height: 8),
+        ...achievementsCatalog.map((ach) {
+          final String id = ach['id']!;
+          final bool earned = child.unlockedAchievements.containsKey(id);
+          final String? dateStr = child.unlockedAchievements[id];
+          return Card(
+            color: const Color(0xFF1E293B),
+            margin: const EdgeInsets.only(bottom: 8),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(14),
+              side: BorderSide(
+                color: earned ? const Color(0xFFF59E0B) : Colors.white12,
+              ),
+            ),
+            child: ListTile(
+              leading: Text(ach['icon']!,
+                  style: TextStyle(
+                      fontSize: 28,
+                      color: earned ? null : Colors.white38)),
+              title: Text(
+                ach['title']!,
+                style: TextStyle(
+                  fontWeight: FontWeight.bold,
+                  color: earned ? const Color(0xFFFDE68A) : Colors.white54,
+                ),
+              ),
+              subtitle: Text(
+                earned && dateStr != null
+                    ? '${ach['desc']} • تم الحصول عليه: ${dateStr.substring(0, 10)}'
+                    : ach['desc']!,
+                style: const TextStyle(fontSize: 11.5, color: Colors.white70),
+              ),
+              trailing: Icon(
+                earned ? Icons.verified_rounded : Icons.hourglass_empty_rounded,
+                color: earned ? const Color(0xFFF59E0B) : Colors.white24,
+              ),
+            ),
+          );
+        }),
+        const SizedBox(height: 16),
+        const Text(
+          '🎁 ركن المكافآت التجميلية الآمنة (باستخدام النجوم المكتسبة فقط — بدون أي عمليات شراء):',
+          style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
+        ),
+        const SizedBox(height: 8),
+        Wrap(
+          spacing: 10,
+          runSpacing: 10,
+          children: cosmeticsShop.map((item) {
+            final String cid = item['id'] as String;
+            final bool owned = child.unlockedCosmetics.contains(cid);
+            final int cost = item['cost'] as int;
+            return Container(
+              width: 160,
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: const Color(0xFF1E293B),
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(
+                  color: owned ? const Color(0xFF10B981) : Colors.white24,
+                ),
+              ),
+              child: Column(
+                children: [
+                  Text(item['icon'] as String,
+                      style: const TextStyle(fontSize: 34)),
+                  const SizedBox(height: 6),
+                  Text(
+                    item['title'] as String,
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(
+                        fontSize: 12.5, fontWeight: FontWeight.bold),
+                  ),
+                  const SizedBox(height: 8),
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: owned
+                            ? const Color(0xFF10B981)
+                            : const Color(0xFFF59E0B),
+                        foregroundColor:
+                            owned ? Colors.white : Colors.black87,
+                      ),
+                      onPressed: owned
+                          ? null
+                          : () async {
+                              final ok = await widget.appState
+                                  .unlockChildCosmeticWithStars(
+                                cosmeticId: cid,
+                                cosmeticTitle: item['title'] as String,
+                                starCost: cost,
+                              );
+                              if (mounted) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(
+                                    content: Text(
+                                      ok
+                                          ? '🎉 مبروك! فتحت «${item['title']}» بنجومك!'
+                                          : '⭐ اجمع $cost نجوم من الدروس والألعاب لفتح هذه الهدية!',
+                                    ),
+                                  ),
+                                );
+                              }
+                            },
+                      child: Text(
+                        owned ? 'مفتوح ✅' : 'فتح ($cost ⭐)',
+                        style: const TextStyle(
+                            fontSize: 11.5, fontWeight: FontWeight.bold),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            );
+          }).toList(),
+        ),
+      ],
     );
   }
 }
