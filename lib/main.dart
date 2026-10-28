@@ -5235,6 +5235,15 @@ class _VerticalVideoFeedPlayerScreenState
                     ),
                   ),
                 ),
+
+                Padding(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 14, vertical: 2),
+                  child: CuteSuperheroCompanionBanner(
+                    appState: widget.appState,
+                    compactMode: true,
+                  ),
+                ),
               ],
             ),
           ),
@@ -8336,6 +8345,447 @@ class _MonitorStatBadge extends StatelessWidget {
   }
 }
 
+class CuteHeroCharacterModel {
+  final String id;
+  final String nameAr;
+  final String titleBadge;
+  final String avatarEmoji;
+  final Color primaryColor;
+  final Color secondaryColor;
+  final List<String> encouragingAlerts;
+
+  const CuteHeroCharacterModel({
+    required this.id,
+    required this.nameAr,
+    required this.titleBadge,
+    required this.avatarEmoji,
+    required this.primaryColor,
+    required this.secondaryColor,
+    required this.encouragingAlerts,
+  });
+}
+
+const List<CuteHeroCharacterModel> kCuteSuperheroCharacters = [
+  CuteHeroCharacterModel(
+    id: 'spidey_hero',
+    nameAr: 'سبايدي البطل اللطيف',
+    titleBadge: 'بطل خفة الحركة والذكاء 🕸️',
+    avatarEmoji: '🕷️🦸‍♂️',
+    primaryColor: Color(0xFFEF4444),
+    secondaryColor: Color(0xFF3B82F6),
+    encouragingAlerts: [
+      'أحسنت يا صديقي البطل! حاستك العنكبوتية الذكية تكتشف الإجابات الصحيحة بسرعة مذهلة!',
+      'تذكير لطيف من سبايدي: البطل الحقيقي يرتب غرفته ويستأذن من ماما وبابا دائماً!',
+      'ما شاء الله! تركيزك عالٍ جداً اليوم، هيا نكمل المرحلة التالية بهدوء وذكاء!',
+    ],
+  ),
+  CuteHeroCharacterModel(
+    id: 'bat_knight',
+    nameAr: 'فارس الليل الذكي (بات هيرو)',
+    titleBadge: 'محقق الألغاز والمنطق 🦇',
+    avatarEmoji: '🦇🦸',
+    primaryColor: Color(0xFFF59E0B),
+    secondaryColor: Color(0xFF334155),
+    encouragingAlerts: [
+      'تحليل عبقري يا بطل! قوة ملاحظتك تشبه أعظم المحققين الأذكياء!',
+      'تنبيه تشجيعي: خذ نفساً عميقاً وهادئاً، فالعقل الهادئ يحل أصعب الألغاز!',
+      'رائع! كل مرحلة تنجزها تزيد نقاط ذكائك وتجعلك بطلاً في الأخلاق والعلم!',
+    ],
+  ),
+  CuteHeroCharacterModel(
+    id: 'super_star',
+    nameAr: 'سوبر نور الخارق',
+    titleBadge: 'بطل القوة والأخلاق الجميلة ⭐',
+    avatarEmoji: '🦸‍♂️✨',
+    primaryColor: Color(0xFF06B6D4),
+    secondaryColor: Color(0xFFEC4899),
+    encouragingAlerts: [
+      'أنت تطير نحو القمة بذكائك وفصاحتك العربية الجميلة يا بطل حنين!',
+      'تذكير البطل الخارق: الكلمة الطيبة والابتسامة هما أعظم قوة خارقة في العالم!',
+      'فخور بك جداً! استمر في التقدم نحو المرحلة ١٠٠ بهدوء وثقة!',
+    ],
+  ),
+  CuteHeroCharacterModel(
+    id: 'elsa_princess',
+    nameAr: 'أميرة الثلج الحكيمة',
+    titleBadge: 'أميرة الهدوء والإبداع ❄️',
+    avatarEmoji: '👸❄️',
+    primaryColor: Color(0xFF38BDF8),
+    secondaryColor: Color(0xFF818CF8),
+    encouragingAlerts: [
+      'قلبك صافي وجميل مثل بلورات الثلج اللامعة! رسمك وإجاباتك في قمة الروعة!',
+      'همسة لطيفة: الهدوء واللطف مع إخوتك يجعلان البيت مملكة سعيدة!',
+      'ما أجمل خطك وتفكيرك! أنتِ نجمة متألقة في واحة الذكاء!',
+    ],
+  ),
+  CuteHeroCharacterModel(
+    id: 'sponge_smile',
+    nameAr: 'سبونج المبتسم المرح',
+    titleBadge: 'صديق البهجة والنشاط 🧽',
+    avatarEmoji: '🧽🌟',
+    primaryColor: Color(0xFFFACC15),
+    secondaryColor: Color(0xFF14B8A6),
+    encouragingAlerts: [
+      'أنا مستعد! أنا مستعد! وأنت أيضاً مستعد لحل المرحلة الجديدة بابتسامة كبيرة!',
+      'تنبيه مبهج: لا تنسَ شرب الماء وغسل يديك بالصابون لتبقى نشيطاً طوال اليوم!',
+      'يا سلام! إجابتك ذكية جداً وتستحق نجمة ذهبية لامعة!',
+    ],
+  ),
+  CuteHeroCharacterModel(
+    id: 'pika_spark',
+    nameAr: 'بيكا الذكي المضيء',
+    titleBadge: 'شرارة الحماس والذاكرة ⚡',
+    avatarEmoji: '⚡🐭',
+    primaryColor: Color(0xFFFBBF24),
+    secondaryColor: Color(0xFFF97316),
+    encouragingAlerts: [
+      'بيكا بيكا! ذاكرتك تلمع بالذكاء والنشاط مثل البرق اللطيف!',
+      'نصيحة لطيفة: أرح عينيك قليلاً وانظر بعيداً ثم عد لنكمل المغامرة الممتعة!',
+      'إنجاز مدهش! لقد جمعت نقاط ذكاء رائعة في هذه المرحلة!',
+    ],
+  ),
+  CuteHeroCharacterModel(
+    id: 'dora_explorer',
+    nameAr: 'المستكشفة الصغيرة المغامرة',
+    titleBadge: 'بطلة الاكتشاف واللغات 🎒',
+    avatarEmoji: '👧🎒',
+    primaryColor: Color(0xFFEC4899),
+    secondaryColor: Color(0xFFA855F7),
+    encouragingAlerts: [
+      'عمل رائع (ممتاز)! لقد اكتشفت الحل الصحيح بنفسك يا مستكشفنا الذكي!',
+      'تذكير المستكشفة: قل «شكراً» و«من فضلك» دائماً لكل من يساعدك في يومك!',
+      'هيا بنا إلى المرحلة التالية! لدينا ١٠٠ مغامرة ذكية بانتظارنا!',
+    ],
+  ),
+  CuteHeroCharacterModel(
+    id: 'simba_cub',
+    nameAr: 'الشبل الشجاع سيمبا',
+    titleBadge: 'بطل الشجاعة والصدق 🦁',
+    avatarEmoji: '🦁👑',
+    primaryColor: Color(0xFFF97316),
+    secondaryColor: Color(0xFF10B981),
+    encouragingAlerts: [
+      'زئير الأبطال الهادئ! شجاعتك في المحاولة والتعلم تجعلك ملك الغابة الذكي!',
+      'تنبيه البطل الشجاع: الصدق والأمانة هما تاج البطولة الحقيقي!',
+      'أحسنت يا بطل! خطوة بعد خطوة تقترب من إنهاء الـ ١٠٠ مرحلة كاملة!',
+    ],
+  ),
+];
+
+class CuteSuperheroCompanionBanner extends StatefulWidget {
+  final AppStateManager appState;
+  final bool compactMode;
+  final String? customCheerMessage;
+
+  const CuteSuperheroCompanionBanner({
+    super.key,
+    required this.appState,
+    this.compactMode = false,
+    this.customCheerMessage,
+  });
+
+  @override
+  State<CuteSuperheroCompanionBanner> createState() =>
+      _CuteSuperheroCompanionBannerState();
+}
+
+class _CuteSuperheroCompanionBannerState
+    extends State<CuteSuperheroCompanionBanner> {
+  int _heroIndex = 0;
+  int _alertIndex = 0;
+
+  void _cycleNextHero() {
+    setState(() {
+      _heroIndex = (_heroIndex + 1) % kCuteSuperheroCharacters.length;
+      _alertIndex = (_alertIndex + 1) % 3;
+    });
+    final hero = kCuteSuperheroCharacters[_heroIndex];
+    final msg = hero.encouragingAlerts[
+        _alertIndex % hero.encouragingAlerts.length];
+    CalmVoiceService.instance.speakCalmly('${hero.nameAr} يقول لك: $msg');
+  }
+
+  void _openHeroFriendsGalleryModal() {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: const Color(0xFF1E293B),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+      ),
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (ctx, setModalState) {
+            return Padding(
+              padding: const EdgeInsets.all(22),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Row(
+                    children: [
+                      Text('🦸‍♂️🌟', style: TextStyle(fontSize: 30)),
+                      SizedBox(width: 10),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'أصدقاؤك الأبطال الخارقون والشخصيات الكرتونية',
+                              style: TextStyle(
+                                fontSize: 17,
+                                fontWeight: FontWeight.bold,
+                                color: Colors.white,
+                              ),
+                            ),
+                            Text(
+                              'اختر بطلك المفضل ليرافقك بتنبيهات لطيفة وتشجيعية بصوت هادئ!',
+                              style: TextStyle(
+                                  fontSize: 12, color: Colors.white70),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 14),
+                  SizedBox(
+                    height: 360,
+                    child: ListView.builder(
+                      itemCount: kCuteSuperheroCharacters.length,
+                      itemBuilder: (ctx, i) {
+                        final h = kCuteSuperheroCharacters[i];
+                        final bool isSelected = _heroIndex == i;
+                        final String alertMsg = h.encouragingAlerts[
+                            _alertIndex % h.encouragingAlerts.length];
+                        return GestureDetector(
+                          onTap: () {
+                            setState(() {
+                              _heroIndex = i;
+                            });
+                            setModalState(() {});
+                            CalmVoiceService.instance.speakCalmly(
+                              '${h.nameAr} يشجعك ويقول: $alertMsg',
+                            );
+                          },
+                          child: Container(
+                            margin: const EdgeInsets.only(bottom: 10),
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(
+                              gradient: LinearGradient(
+                                colors: [
+                                  h.primaryColor.withOpacity(0.28),
+                                  h.secondaryColor.withOpacity(0.18),
+                                ],
+                              ),
+                              borderRadius: BorderRadius.circular(18),
+                              border: Border.all(
+                                color: isSelected
+                                    ? h.primaryColor
+                                    : Colors.white12,
+                                width: isSelected ? 2.5 : 1,
+                              ),
+                            ),
+                            child: Row(
+                              children: [
+                                Container(
+                                  padding: const EdgeInsets.all(10),
+                                  decoration: BoxDecoration(
+                                    color: h.primaryColor.withOpacity(0.25),
+                                    shape: BoxShape.circle,
+                                    border: Border.all(color: h.primaryColor),
+                                  ),
+                                  child: Text(
+                                    h.avatarEmoji,
+                                    style: const TextStyle(fontSize: 28),
+                                  ),
+                                ),
+                                const SizedBox(width: 12),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Row(
+                                        children: [
+                                          Expanded(
+                                            child: Text(
+                                              h.nameAr,
+                                              style: const TextStyle(
+                                                fontWeight: FontWeight.bold,
+                                                fontSize: 15,
+                                                color: Colors.white,
+                                              ),
+                                            ),
+                                          ),
+                                          Container(
+                                            padding: const EdgeInsets.symmetric(
+                                                horizontal: 8, vertical: 2),
+                                            decoration: BoxDecoration(
+                                              color: Colors.black26,
+                                              borderRadius:
+                                                  BorderRadius.circular(10),
+                                            ),
+                                            child: Text(
+                                              h.titleBadge,
+                                              style: TextStyle(
+                                                fontSize: 10,
+                                                color: h.primaryColor,
+                                                fontWeight: FontWeight.bold,
+                                              ),
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                      const SizedBox(height: 6),
+                                      Text(
+                                        '💬 «$alertMsg»',
+                                        style: const TextStyle(
+                                          fontSize: 12,
+                                          color: Color(0xFFFDE68A),
+                                          height: 1.4,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                IconButton(
+                                  onPressed: () {
+                                    CalmVoiceService.instance.speakCalmly(
+                                      '${h.nameAr} يقول لك: $alertMsg',
+                                    );
+                                  },
+                                  icon: const Icon(Icons.volume_up_rounded,
+                                      color: Colors.white),
+                                ),
+                              ],
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final hero = kCuteSuperheroCharacters[
+        _heroIndex % kCuteSuperheroCharacters.length];
+    final String message = widget.customCheerMessage ??
+        hero.encouragingAlerts[_alertIndex % hero.encouragingAlerts.length];
+
+    return GestureDetector(
+      onTap: _openHeroFriendsGalleryModal,
+      child: Container(
+        padding: EdgeInsets.symmetric(
+          horizontal: 12,
+          vertical: widget.compactMode ? 7 : 10,
+        ),
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            colors: [
+              hero.primaryColor.withOpacity(0.32),
+              hero.secondaryColor.withOpacity(0.25),
+              const Color(0xFF1E293B).withOpacity(0.92),
+            ],
+          ),
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(color: hero.primaryColor.withOpacity(0.75), width: 1.5),
+        ),
+        child: Row(
+          children: [
+            GestureDetector(
+              onTap: _cycleNextHero,
+              child: Container(
+                padding: const EdgeInsets.all(6),
+                decoration: BoxDecoration(
+                  color: hero.primaryColor.withOpacity(0.25),
+                  shape: BoxShape.circle,
+                  border: Border.all(color: hero.primaryColor),
+                ),
+                child: Text(
+                  hero.avatarEmoji,
+                  style: TextStyle(fontSize: widget.compactMode ? 20 : 26),
+                ),
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Row(
+                    children: [
+                      Text(
+                        hero.nameAr,
+                        style: TextStyle(
+                          fontSize: widget.compactMode ? 11 : 13,
+                          fontWeight: FontWeight.bold,
+                          color: const Color(0xFFFDE68A),
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      Flexible(
+                        child: Text(
+                          '• ${hero.titleBadge}',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            fontSize: 10,
+                            color: Colors.white70,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    '💬 $message',
+                    maxLines: widget.compactMode ? 1 : 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: widget.compactMode ? 11 : 12,
+                      color: Colors.white,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 6),
+            GestureDetector(
+              onTap: _cycleNextHero,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: Colors.black26,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: const Text(
+                  'بطل آخر 🔄',
+                  style: TextStyle(
+                    fontSize: 10,
+                    color: Colors.white,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class EtiquetteStrokePath {
   final List<Offset> points;
   final Color color;
@@ -8360,14 +8810,14 @@ class EtiquetteDrawingCanvasPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final Paint guidePaint = Paint()
-      ..color = Colors.white.withOpacity(0.16)
+      ..color = Colors.white.withOpacity(0.18)
       ..style = PaintingStyle.stroke
       ..strokeWidth = 4.0;
 
     final Offset center = Offset(size.width / 2, size.height / 2);
     final double radius = min(size.width, size.height) * 0.34;
 
-    switch (templateIndex % 6) {
+    switch (templateIndex % 8) {
       case 0:
         final Path heartPath = Path();
         heartPath.moveTo(center.dx, center.dy + radius * 0.75);
@@ -8424,9 +8874,6 @@ class EtiquetteDrawingCanvasPainter extends CustomPainter {
         canvas.drawPath(starPath, guidePaint);
         break;
       case 3:
-        final Rect crownRect = Rect.fromCenter(
-            center: center, width: radius * 1.6, height: radius * 1.1);
-        final Path flowerPath = Path();
         for (int i = 0; i < 6; i++) {
           final double angle = i * pi / 3;
           canvas.drawCircle(
@@ -8442,7 +8889,6 @@ class EtiquetteDrawingCanvasPainter extends CustomPainter {
           Offset(center.dx, size.height - 20),
           guidePaint,
         );
-        flowerPath.addRect(crownRect);
         break;
       case 4:
         final Rect houseBody = Rect.fromCenter(
@@ -8458,7 +8904,7 @@ class EtiquetteDrawingCanvasPainter extends CustomPainter {
           ..close();
         canvas.drawPath(roof, guidePaint);
         break;
-      default:
+      case 5:
         canvas.drawCircle(center, radius, guidePaint);
         for (int i = 0; i < 8; i++) {
           final double angle = i * pi / 4;
@@ -8470,6 +8916,34 @@ class EtiquetteDrawingCanvasPainter extends CustomPainter {
             guidePaint,
           );
         }
+        break;
+      case 6:
+        final Path crown = Path()
+          ..moveTo(center.dx - radius, center.dy + radius * 0.5)
+          ..lineTo(center.dx - radius * 0.8, center.dy - radius * 0.5)
+          ..lineTo(center.dx - radius * 0.3, center.dy)
+          ..lineTo(center.dx, center.dy - radius * 0.7)
+          ..lineTo(center.dx + radius * 0.3, center.dy)
+          ..lineTo(center.dx + radius * 0.8, center.dy - radius * 0.5)
+          ..lineTo(center.dx + radius, center.dy + radius * 0.5)
+          ..close();
+        canvas.drawPath(crown, guidePaint);
+        break;
+      default:
+        final Rect bookRect = Rect.fromCenter(
+          center: center,
+          width: radius * 1.7,
+          height: radius * 1.2,
+        );
+        canvas.drawRRect(
+          RRect.fromRectAndRadius(bookRect, const Radius.circular(12)),
+          guidePaint,
+        );
+        canvas.drawLine(
+          Offset(center.dx, bookRect.top),
+          Offset(center.dx, bookRect.bottom),
+          guidePaint,
+        );
         break;
     }
 
@@ -8496,6 +8970,327 @@ class EtiquetteDrawingCanvasPainter extends CustomPainter {
       true;
 }
 
+class HundredLevelGamesGenerator {
+  static const List<Map<String, dynamic>> _categoryClusters = [
+    {
+      'name': 'الفواكه الطازجة',
+      'items': ['🍎', '🍌', '🍇', '🍉', '🍓', '🍒', '🍑', '🍍', '🥝', '🍊'],
+    },
+    {
+      'name': 'حيوانات الغابة والمزرعة',
+      'items': ['🦁', '🐰', '🐱', '🐶', '🐼', '🐨', '🐯', '🦊', '🐮', '🐑'],
+    },
+    {
+      'name': 'وسائل النقل والمواصلات',
+      'items': ['🚗', '🚌', '🚂', '✈️', '🚀', '🚁', '🚢', '🚲', '🚜', '🚑'],
+    },
+    {
+      'name': 'عجائب السماء والفضاء',
+      'items': ['☀️', '🌙', '⭐', '🌟', '🌈', '☁️', '⚡', '🪐', '☄️', '🌍'],
+    },
+    {
+      'name': 'الأدوات المدرسية والتعلم',
+      'items': ['✏️', '📘', '🖍️', '📏', '📐', '🎒', '✂️', '🖊️', '📓', '🔍'],
+    },
+    {
+      'name': 'الكائنات البحرية',
+      'items': ['🐬', '🐠', '🐙', '🐳', '🦀', '🦈', '🐡', '🦐', '🦑', '🐚'],
+    },
+    {
+      'name': 'النباتات والزهور',
+      'items': ['🌸', '🌹', '🌻', '🌷', '🌲', '🌳', '🌴', '🌵', '🍀', '🌿'],
+    },
+    {
+      'name': 'الأشكال الهندسية والألوان',
+      'items': ['🟥', '🟦', '🟩', '🟨', '🟪', '🟧', '🔵', '🟢', '🟡', '🔺'],
+    },
+    {
+      'name': 'الخضروات الصحية',
+      'items': ['🥕', '🥒', '🥦', '🍅', '🌽', '🍆', '🥔', '🥬', '🫑', '🧄'],
+    },
+    {
+      'name': 'الرياضة والنشاط البدني',
+      'items': ['⚽', '🏀', '🎾', '🏐', '🏈', '⚾', '🏓', '🏸', '🥊', '🏆'],
+    },
+  ];
+
+  static Map<String, dynamic> getEtiquetteDrawingLevel(int index) {
+    final int levelNum = (index % 100) + 1;
+    const List<Map<String, String>> baseLessons = [
+      {
+        'shape': 'قلب المحبة والرحمة ❤️',
+        'badge': 'آداب العائلة وبر الوالدين',
+        'lesson':
+            'من أجمل الآداب أن نبتسم في وجه ماما وبابا ونقول لهما بقلب محب: شكراً لكما، أنا أحبكما كثيراً!',
+        'phrase': '«رَبِّ ارْحَمْهُمَا كَمَا رَبَّيَانِي صَغِيراً»',
+      },
+      {
+        'shape': 'الوجه المبتسم وإلقاء السلام 😊',
+        'badge': 'آداب التحية والابتسامة',
+        'lesson':
+            'الطفل المؤدب يبدأ من يقابله بابتسامة لطيفة ويقول بصوت هادئ: السلام عليكم ورحمة الله.',
+        'phrase': '«السَّلَامُ عَلَيْكُمْ وَرَحْمَةُ اللَّهِ»',
+      },
+      {
+        'shape': 'نجمة الصدق والأمانة ⭐',
+        'badge': 'الأخلاق الحميدة',
+        'lesson':
+            'الصدق يجعلنا مضيئين مثل النجمة اللامعة في السماء! البطل يقول الحقيقة دائماً ويحافظ على الأمانة.',
+        'phrase': '«أَنَا صَادِقٌ وَأَمِينٌ دَائِماً»',
+      },
+      {
+        'shape': 'زهرة النظافة والنظام 🌸',
+        'badge': 'آداب النظافة والطهارة',
+        'lesson':
+            'النظافة من الإيمان! نغسل أيدينا بالماء والصابون قبل الأكل وبعده، ونحافظ على نظافة غرفتنا.',
+        'phrase': '«الطُّهُورُ شَطْرُ الإِيمَانِ»',
+      },
+      {
+        'shape': 'بيت الكرم والاستئذان 🏠',
+        'badge': 'آداب الاستئذان والضيافة',
+        'lesson':
+            'نطرق الباب برفق ثلاث مرات ونستأذن قبل الدخول، ونرحب بضيوفنا بابتسامة وكرم.',
+        'phrase': '«أَسْتَأْذِنُ بِأَدَبٍ قَبْلَ الدُّخُولِ»',
+      },
+      {
+        'shape': 'شمس النشاط وذكر الصباح ☀️',
+        'badge': 'آداب الاستيقاظ والنشاط',
+        'lesson':
+            'ننام مبكراً ونستيقظ بنشاط فنرتب فراشنا ونفرش أسناننا ونشكر الله على نعمه.',
+        'phrase': '«الحَمْدُ لِلَّهِ الَّذِي أَحْيَانَا بَعْدَ مَا أَمَاتَنَا»',
+      },
+      {
+        'shape': 'تاج الكلمة الطيبة والشكر 👑',
+        'badge': 'آداب الحديث والشكر',
+        'lesson':
+            'من يصنع لنا معروفاً نقول له: جزاك الله خيراً وشكراً لك، ونتحدث دائماً بصوت هادئ وجميل.',
+        'phrase': '«الكَلِمَةُ الطَّيِّبَةُ صَدَقَةٌ»',
+      },
+      {
+        'shape': 'كتاب العلم والحكمة 📘',
+        'badge': 'آداب طالب العلم',
+        'lesson':
+            'نستمع لمعلمنا ولوالدينا بإنصات، ونحافظ على كتبنا وأدواتنا لنصبح علماء وأبطالاً نافعين.',
+        'phrase': '«وَقُلْ رَبِّ زِدْنِي عِلْماً»',
+      },
+      {
+        'shape': 'قلب إماطة الأذى عن الطريق 💚',
+        'badge': 'آداب الطريق والبيئة',
+        'lesson':
+            'لا نلقي الأوراق في الشارع أبداً، بل نضعها في سلة المهملات ونبعد أي أذى عن طريق الناس.',
+        'phrase': '«إِمَاطَةُ الأَذَى عَنِ الطَّرِيقِ صَدَقَةٌ»',
+      },
+      {
+        'shape': 'ابتسامة المشاركة والتعاون مع الأصدقاء 🤝',
+        'badge': 'آداب الصداقة والتعاون',
+        'lesson':
+            'نشارك ألعابنا مع إخوتنا وأصدقائنا بحب، ونساعد من يحتاج إلى المساعدة.',
+        'phrase': '«المُؤْمِنُ لِلْمُؤْمِنِ كَالبُنْيَانِ يَشُدُّ بَعْضُهُ بَعْضاً»',
+      },
+    ];
+    final item = baseLessons[index % baseLessons.length];
+    return {
+      'levelNumber': levelNum,
+      'title': 'لوحة الآداب رقم $levelNum من ١٠٠: ${item['shape']}',
+      'badge': item['badge']!,
+      'etiquetteLesson': item['lesson']!,
+      'arabicDuaOrPhrase': item['phrase']!,
+      'instruction':
+          'لوّن وارسم بيدك اللوحة رقم ($levelNum) واستمع لتشجيع الأبطال الخارقين!',
+    };
+  }
+
+  static Map<String, dynamic> getOddOneOutLevel(int index) {
+    final int levelNum = (index % 100) + 1;
+    final int mainClusterIdx = index % _categoryClusters.length;
+    final int oddClusterIdx =
+        (mainClusterIdx + 1 + (index ~/ 10)) % _categoryClusters.length;
+
+    final mainCluster = _categoryClusters[mainClusterIdx];
+    final oddCluster = _categoryClusters[oddClusterIdx];
+
+    final List<String> mainItems = List<String>.from(mainCluster['items'] as List);
+    final List<String> oddItems = List<String>.from(oddCluster['items'] as List);
+
+    final int offset = (index * 3) % mainItems.length;
+    final String m1 = mainItems[offset % mainItems.length];
+    final String m2 = mainItems[(offset + 1) % mainItems.length];
+    final String m3 = mainItems[(offset + 2) % mainItems.length];
+    final String oddItem = oddItems[(index * 2) % oddItems.length];
+
+    final List<String> choices = [m1, m2, m3, oddItem];
+    final int pos = index % 4;
+    final String temp = choices[pos];
+    choices[pos] = choices[3];
+    choices[3] = temp;
+
+    return {
+      'levelNumber': levelNum,
+      'category': '${mainCluster['name']} × ${oddCluster['name']}',
+      'visualTheme': index % 4,
+      'title':
+          'المرحلة $levelNum من ١٠٠: أخرج الرمز المختلف عن مجموعة (${mainCluster['name']}):',
+      'items': choices,
+      'odd': oddItem,
+      'explanation':
+          'الرمز ($oddItem) ينتمي إلى (${oddCluster['name']})، بينما البقية من (${mainCluster['name']})!',
+    };
+  }
+
+  static Map<String, dynamic> getPatternLogicLevel(int index) {
+    final int levelNum = (index % 100) + 1;
+    final clusterA = _categoryClusters[index % _categoryClusters.length];
+    final clusterB = _categoryClusters[(index + 2) % _categoryClusters.length];
+    final List<String> listA = List<String>.from(clusterA['items'] as List);
+    final List<String> listB = List<String>.from(clusterB['items'] as List);
+
+    final String a = listA[index % listA.length];
+    final String b = listA[(index + 3) % listA.length];
+    final String c = listB[index % listB.length];
+    final String d = listB[(index + 4) % listB.length];
+
+    final int patternType = index % 4;
+    List<String> sequence;
+    String answer;
+    String hint;
+
+    if (patternType == 0) {
+      sequence = [a, b, a, b, a];
+      answer = b;
+      hint = 'اللغز $levelNum من ١٠٠: نمط متبادل ($a ثم $b ثم $a ثم $b)... ما التالي؟';
+    } else if (patternType == 1) {
+      sequence = [a, a, b, a, a];
+      answer = b;
+      hint = 'اللغز $levelNum من ١٠٠: عنصران متشابهان ($a $a) ثم ($b)... أكمل النمط!';
+    } else if (patternType == 2) {
+      sequence = [a, b, c, a, b];
+      answer = c;
+      hint = 'اللغز $levelNum من ١٠٠: ثلاثية مرتبة ($a ثم $b ثم $c)... ما العنصر الثالث؟';
+    } else {
+      sequence = [a, b, b, a, b];
+      answer = b;
+      hint = 'اللغز $levelNum من ١٠٠: ($a) يتبعه مرتان ($b $b)... ماذا يأتي الآن؟';
+    }
+
+    final List<String> options = [a, b, c, d];
+    return {
+      'levelNumber': levelNum,
+      'sequence': sequence,
+      'options': options,
+      'answer': answer,
+      'hint': hint,
+    };
+  }
+
+  static List<String> getMemoryBoardForLevel(int levelNumber) {
+    final int idx = (levelNumber - 1).clamp(0, 99);
+    final cluster1 = _categoryClusters[idx % _categoryClusters.length];
+    final cluster2 = _categoryClusters[(idx + 1) % _categoryClusters.length];
+    final List<String> pool = [
+      ...List<String>.from(cluster1['items'] as List),
+      ...List<String>.from(cluster2['items'] as List),
+    ];
+    final int start = (idx * 2) % (pool.length - 6);
+    final List<String> chosen6 = pool.sublist(start, start + 6);
+    final List<String> pairs = [];
+    for (final item in chosen6) {
+      pairs.add(item);
+      pairs.add(item);
+    }
+    pairs.shuffle(Random(levelNumber * 97));
+    return pairs;
+  }
+
+  static Map<String, dynamic> getVisualMathLevel(int index) {
+    final int levelNum = (index % 100) + 1;
+    final cluster = _categoryClusters[index % _categoryClusters.length];
+    final List<String> items = List<String>.from(cluster['items'] as List);
+    final String emoji = items[index % items.length];
+
+    final bool isAdd = (index % 2 == 1);
+    int target;
+    int a = 1;
+    int b = 1;
+    if (!isAdd) {
+      target = (index % 9) + 2;
+    } else {
+      a = (index % 5) + 1;
+      b = ((index ~/ 2) % 5) + 1;
+      target = a + b;
+    }
+
+    final List<int> options = [
+      target,
+      max(1, target - 1),
+      target + 1,
+      target + 2,
+    ];
+    final int swapPos = index % 4;
+    final int tmp = options[swapPos];
+    options[swapPos] = options[0];
+    options[0] = tmp;
+
+    return {
+      'levelNumber': levelNum,
+      'mode': isAdd ? 'add' : 'count',
+      'a': a,
+      'b': b,
+      'target': target,
+      'emoji': emoji,
+      'options': options,
+    };
+  }
+
+  static const List<Map<String, dynamic>> _baseArabicVocabulary = [
+    {'emoji': '🦁', 'word': 'أَسَد', 'missing': 'ـسَد', 'ans': 'أ', 'opts': ['أ', 'ب', 'ت', 'س']},
+    {'emoji': '🏠', 'word': 'بَيْت', 'missing': 'ـيْت', 'ans': 'ب', 'opts': ['ب', 'ت', 'ث', 'ن']},
+    {'emoji': '🍎', 'word': 'تُفَّاحَة', 'missing': 'ـفَّاحَة', 'ans': 'ت', 'opts': ['ج', 'ت', 'خ', 'م']},
+    {'emoji': '🦊', 'word': 'ثَعْلَب', 'missing': 'ـعْلَب', 'ans': 'ث', 'opts': ['ب', 'ت', 'ث', 'ف']},
+    {'emoji': '🐪', 'word': 'جَمَل', 'missing': 'ـمَل', 'ans': 'ج', 'opts': ['ج', 'ح', 'خ', 'ع']},
+    {'emoji': '🕊️', 'word': 'حَمَامَة', 'missing': 'ـمَامَة', 'ans': 'ح', 'opts': ['ج', 'ح', 'خ', 'هـ']},
+    {'emoji': '🐑', 'word': 'خَرُوف', 'missing': 'ـرُوف', 'ans': 'خ', 'opts': ['ح', 'خ', 'غ', 'ق']},
+    {'emoji': '🐻', 'word': 'دُبّ', 'missing': 'ـبّ', 'ans': 'د', 'opts': ['د', 'ذ', 'ر', 'ز']},
+    {'emoji': '🌽', 'word': 'ذُرَة', 'missing': 'ـرَة', 'ans': 'ذ', 'opts': ['د', 'ذ', 'ز', 'ظ']},
+    {'emoji': ' pomegranate', 'word': 'رُمَّان', 'missing': 'ـمَّان', 'ans': 'ر', 'opts': ['د', 'ر', 'ز', 'و']},
+    {'emoji': '🦒', 'word': 'زَرَافَة', 'missing': 'ـرَافَة', 'ans': 'ز', 'opts': ['ر', 'ز', 'س', 'ص']},
+    {'emoji': '🐟', 'word': 'سَمَكَة', 'missing': 'ـمَكَة', 'ans': 'س', 'opts': ['ش', 'س', 'ص', 'ز']},
+    {'emoji': '☀️', 'word': 'شَمْس', 'missing': 'ـمْس', 'ans': 'ش', 'opts': ['س', 'ش', 'ص', 'ض']},
+    {'emoji': '🦅', 'word': 'صَقْر', 'missing': 'ـقْر', 'ans': 'ص', 'opts': ['س', 'ش', 'ص', 'ط']},
+    {'emoji': '🐸', 'word': 'ضِفْدَع', 'missing': 'ـفْدَع', 'ans': 'ض', 'opts': ['ص', 'ض', 'ط', 'ظ']},
+    {'emoji': '✈️', 'word': 'طَائِرَة', 'missing': 'ـائِرَة', 'ans': 'ط', 'opts': ['ت', 'ط', 'ظ', 'د']},
+    {'emoji': '✉️', 'word': 'ظَرْف', 'missing': 'ـرْف', 'ans': 'ظ', 'opts': ['ذ', 'ز', 'ط', 'ظ']},
+    {'emoji': '🍇', 'word': 'عِنَب', 'missing': 'ـنَب', 'ans': 'ع', 'opts': ['ع', 'غ', 'ف', 'ق']},
+    {'emoji': '☁️', 'word': 'غَيْمَة', 'missing': 'ـيْمَة', 'ans': 'غ', 'opts': ['ع', 'غ', 'خ', 'ق']},
+    {'emoji': '🦋', 'word': 'فَرَاشَة', 'missing': 'ـرَاشَة', 'ans': 'ف', 'opts': ['ص', 'ض', 'ف', 'ن']},
+    {'emoji': '🌙', 'word': 'قَمَر', 'missing': 'ـمَر', 'ans': 'ق', 'opts': ['ف', 'ق', 'ك', 'ل']},
+    {'emoji': '📘', 'word': 'كِتَاب', 'missing': 'ـتَاب', 'ans': 'ك', 'opts': ['ق', 'ك', 'ل', 'م']},
+    {'emoji': '🍋', 'word': 'لَيْمُون', 'missing': 'ـيْمُون', 'ans': 'ل', 'opts': ['ك', 'ل', 'م', 'ن']},
+    {'emoji': '🍌', 'word': 'مَوْز', 'missing': 'ـوْز', 'ans': 'م', 'opts': ['ل', 'م', 'ن', 'هـ']},
+    {'emoji': '🐝', 'word': 'نَحْلَة', 'missing': 'ـحْلَة', 'ans': 'ن', 'opts': ['ب', 'ت', 'ن', 'ي']},
+    {'emoji': '🎁', 'word': 'هَدِيَّة', 'missing': 'ـدِيَّة', 'ans': 'هـ', 'opts': ['ع', 'هـ', 'و', 'ي']},
+    {'emoji': '🌹', 'word': 'وَرْدَة', 'missing': 'ـرْدَة', 'ans': 'و', 'opts': ['ر', 'ز', 'و', 'ي']},
+    {'emoji': '🖐️', 'word': 'يَد', 'missing': 'ـد', 'ans': 'ي', 'opts': ['ب', 'ت', 'ن', 'ي']},
+  ];
+
+  static Map<String, dynamic> getArabicWordLevel(int index) {
+    final int levelNum = (index % 100) + 1;
+    final item = _baseArabicVocabulary[index % _baseArabicVocabulary.length];
+    final String emoji = (item['emoji'] as String).trim() == 'pomegranate'
+        ? '🍎'
+        : item['emoji'] as String;
+    final String word = item['word'] as String;
+    return {
+      'levelNumber': levelNum,
+      'emoji': emoji,
+      'word': word,
+      'missingDisplay': item['missing'] as String,
+      'prompt': 'المرحلة $levelNum من ١٠٠ — اختر الحرف الأول لكلمة ($word):',
+      'options': List<String>.from(item['opts'] as List),
+      'answer': item['ans'] as String,
+    };
+  }
+}
+
 class BrainGamesHubScreen extends StatefulWidget {
   final AppStateManager appState;
   const BrainGamesHubScreen({super.key, required this.appState});
@@ -8506,6 +9301,7 @@ class BrainGamesHubScreen extends StatefulWidget {
 
 class _BrainGamesHubScreenState extends State<BrainGamesHubScreen> {
   int _selectedGameIndex = 0;
+  String? _heroReactionMessage;
 
   int _etiquetteBoardIndex = 0;
   final List<EtiquetteStrokePath> _drawingStrokes = [];
@@ -8530,13 +9326,7 @@ class _BrainGamesHubScreenState extends State<BrainGamesHubScreen> {
   int? _firstFlippedIndex;
   bool _memoryBusy = false;
 
-  int _mathRoundNumber = 1;
-  String _mathMode = 'count';
-  int _mathTargetCount = 4;
-  int _mathAddendA = 2;
-  int _mathAddendB = 3;
-  String _mathEmoji = '🍎';
-  List<int> _mathOptions = [3, 4, 5, 6];
+  int _mathQuestionIndex = 0;
   String? _mathFeedback;
   bool _mathAnswered = false;
 
@@ -8544,388 +9334,25 @@ class _BrainGamesHubScreenState extends State<BrainGamesHubScreen> {
   String? _wordFeedback;
   bool _wordCorrect = false;
 
-  static const List<Map<String, dynamic>> _etiquetteDrawingLessons = [
-    {
-      'title': '١. قلب المحبة وبرّ الوالدين ❤️',
-      'badge': 'آداب العائلة',
-      'etiquetteLesson':
-          'من أجمل الآداب أن نبتسم في وجه ماما وبابا ونقول لهما بقلب محب: «شكراً لكما، أنا أحبكما كثيراً!»',
-      'arabicDuaOrPhrase': '«رَبِّ ارْحَمْهُمَا كَمَا رَبَّيَانِي صَغِيراً»',
-      'instruction': 'لوّن وارسم بيدك داخل وحول قلب المحبة الجميل باللون الذي تحبه!',
-    },
-    {
-      'title': '٢. الوجه المبتسم وإلقاء السلام 😊',
-      'badge': 'آداب التحية',
-      'etiquetteLesson':
-          'الطفل المؤدب يبدأ من يقابله بابتسامة لطيفة ويقول بصوت هادئ: «السلام عليكم ورحمة الله» لأن الابتسامة في وجه أخيك صدقة.',
-      'arabicDuaOrPhrase': '«السَّلَامُ عَلَيْكُمْ وَرَحْمَةُ اللَّهِ»',
-      'instruction': 'ارسم ملامح الوجه المبتسم ولوّنه بألوان البهجة والسرور!',
-    },
-    {
-      'title': '٣. نجمة الصدق والأمانة ⭐',
-      'badge': 'الأخلاق الحميدة',
-      'etiquetteLesson':
-          'الصدق يجعلنا مضيئين مثل النجمة اللامعة في السماء! الطفل البطل يقول الحقيقة دائماً ويحافظ على الأمانة.',
-      'arabicDuaOrPhrase': '«أَنَا صَادِقٌ وَأَمِينٌ دَائِماً»',
-      'instruction': 'تتبع خطوط نجمة الصدق الخماسية ولوّنها باللون الذهبي والأصفر!',
-    },
-    {
-      'title': '٤. زهرة النظافة وترتيب الغرفة 🌸',
-      'badge': 'آداب النظافة',
-      'etiquetteLesson':
-          'النظافة من الإيمان! نحن نغسل أيدينا بالماء والصابون قبل الأكل وبعده، ونرتب ألعابنا ونحافظ على جمال حديقتنا.',
-      'arabicDuaOrPhrase': '«بِسْمِ اللَّهِ في أَوَّلِهِ وَآخِرِهِ»',
-      'instruction': 'ارسم بتلات زهرة النظافة الجميلة ولوّن أوراقها الخضراء!',
-    },
-    {
-      'title': '٥. بيت الكرم والاستئذان قبل الدخول 🏠',
-      'badge': 'آداب الاستئذان',
-      'etiquetteLesson':
-          'من الآداب الراقية أن نطرق الباب برفق ثلاث مرات ونستأذن قبل الدخول إلى أي غرفة، ونكرم ضيوفنا في بيتنا الجميل.',
-      'arabicDuaOrPhrase': '«أَسْتَأْذِنُ بِأَدَبٍ قَبْلَ الدُّخُولِ»',
-      'instruction': 'ارسم سقف وجدران بيت الكرم ولوّنه بألوان دافئة ومبهجة!',
-    },
-    {
-      'title': '٦. شمس النشاط المبكر وذكر الصباح ☀️',
-      'badge': 'آداب الصباح',
-      'etiquetteLesson':
-          'ننام مبكراً ونستيقظ في الصباح بنشاط، فنرتب فراشنا ونفرش أسناننا ونشكر الله على يوم جديد جميل.',
-      'arabicDuaOrPhrase': '«الحَمْدُ لِلَّهِ الَّذِي أَحْيَانَا بَعْدَ مَا أَمَاتَنَا»',
-      'instruction': 'ارسم أشعة الشمس الدافئة الساطعة ولوّنها بالبرتقالي والأصفر!',
-    },
-  ];
-
-  static const List<Map<String, dynamic>> _oddOneOutQuestions = [
-    {
-      'category': 'الفواكه والمواصلات',
-      'visualTheme': 0,
-      'title': '١. أخرج الشكل المختلف لتنمية قوة الملاحظة والتصنيف:',
-      'items': ['🍎', '🍌', '🍇', '🚗'],
-      'odd': '🚗',
-      'explanation': 'السيارة وسيلة مواصلات، بينما التفاحة والموز والعنب من الفواكه!',
-    },
-    {
-      'category': 'الحيوانات والنباتات',
-      'visualTheme': 1,
-      'title': '٢. أي عنصر من هذه العناصر يختلف عن الباقين؟',
-      'items': ['🐱', '🐰', '🦁', '🌲'],
-      'odd': '🌲',
-      'explanation': 'الشجرة من النباتات، بينما القطة والأرنب والأسد من الحيوانات!',
-    },
-    {
-      'category': 'عناصر السماء والملابس',
-      'visualTheme': 2,
-      'title': '٣. ابحث بدقة عن الرمز الذي لا يوجد في السماء:',
-      'items': ['☀️', '🌙', '⭐', '👟'],
-      'odd': '👟',
-      'explanation': 'الحذاء نرتديه في أقدامنا، أما الشمس والقمر والنجمة فتوجد في السماء!',
-    },
-    {
-      'category': 'أدوات الدراسة والطعام',
-      'visualTheme': 3,
-      'title': '٤. أخرج العنصر غير المشابه لأدوات المدرسة:',
-      'items': ['✏️', '📘', '🖍️', '🍕'],
-      'odd': '🍕',
-      'explanation': 'البيتزا طعام، بينما القلم والكتاب والألوان أدوات مدرسية للتعلم!',
-    },
-    {
-      'category': 'كائنات البحر والطيور',
-      'visualTheme': 0,
-      'title': '٥. أي كائن من هذه الكائنات لا يعيش تحت الماء؟',
-      'items': ['🐬', '🐠', '🐙', '🦅'],
-      'odd': '🦅',
-      'explanation': 'الصقر يطير عالياً في الجو، بينما الدولفين والسمكة والأخطبوط كائنات بحرية!',
-    },
-    {
-      'category': 'وسائل الطيران والبر',
-      'visualTheme': 1,
-      'title': '٦. ما هي الوسيلة التي لا تطير في الهواء؟',
-      'items': ['✈️', '🚁', '🚀', '🚲'],
-      'odd': '🚲',
-      'explanation': 'الدراجة تسير على الأرض، بينما الطائرة والمروحية والصاروخ تطير في السماء!',
-    },
-    {
-      'category': 'الفصول والملابس',
-      'visualTheme': 2,
-      'title': '٧. أي قطعة ملابس لا تناسب فصل الشتاء البارد؟',
-      'items': ['🧥', '🧣', '🧤', '🩱'],
-      'odd': '🩱',
-      'explanation': 'ملابس السباحة للصيف، أما المعطف والوشاح والقفاز فنلبسها في الشتاء الدافئ!',
-    },
-    {
-      'category': 'الأشكال الهندسية',
-      'visualTheme': 3,
-      'title': '٨. لاحظ الزوايا والأضلاع: أي شكل هندسي مختلف؟',
-      'items': ['🟥', '🟦', '🟧', '🔵'],
-      'odd': '🔵',
-      'explanation': 'الدائرة مستديرة بدون زوايا، بينما المربعات لها أربعة أضلاع وزوايا!',
-    },
-    {
-      'category': 'الحواس الخمس',
-      'visualTheme': 0,
-      'title': '٩. أي رمز لا يمثل عضواً من أعضاء الحواس في الوجه؟',
-      'items': ['👁️', '👂', '👃', '🪑'],
-      'odd': '🪑',
-      'explanation': 'الكرسي من الأثاث، بينما العين والأذن والأنف من نعم الحواس التي وهبنا الله إياها!',
-    },
-    {
-      'category': 'الخضروات والحلويات',
-      'visualTheme': 1,
-      'title': '١٠. أي عنصر ليس من الخضروات الطبيعية الطازجة؟',
-      'items': ['🥕', '🥒', '🥦', '🍩'],
-      'odd': '🍩',
-      'explanation': 'الدونات من الحلويات المصنعة، بينما الجزر والخيار والبروكلي خضروات صحية مفيدة!',
-    },
-    {
-      'category': 'الآلات الصوتية والرياضة',
-      'visualTheme': 2,
-      'title': '١١. أي عنصر يستخدم للرياضة وليس لإصدار الأصوات؟',
-      'items': ['🥁', '🎺', '🔔', '⚽'],
-      'odd': '⚽',
-      'explanation': 'كرة القدم للرياضة والجرى، بينما الطبلة والبوق والجرس تصدر أصواتاً!',
-    },
-    {
-      'category': 'الحشرات والزواحف',
-      'visualTheme': 3,
-      'title': '١٢. أي كائن من هذه المجموعة لا يملك أجنحة للطيران؟',
-      'items': ['🦋', '🐝', '🐞', '🐢'],
-      'odd': '🐢',
-      'explanation': 'السلحفاة تمشي ببطء على الأرض، بينما الفراشة والنحلة والدعسوقة تطير بأجنحتها!',
-    },
-    {
-      'category': 'أدوات المائدة والنجارة',
-      'visualTheme': 0,
-      'title': '١٣. أي أداة لا نستخدمها أثناء تناول الطعام على المائدة؟',
-      'items': ['🥄', '🍴', '🥣', '🔨'],
-      'odd': '🔨',
-      'explanation': 'المطرقة أداة للنجارة والإصلاح، بينما الملعقة والشوكة والطبق لأدب الطعام!',
-    },
-    {
-      'category': 'الأرقام والحروف',
-      'visualTheme': 1,
-      'title': '١٤. دقّق النظر: أي رمز ليس من الأرقام الحسابية؟',
-      'items': ['١', '٥', '٩', 'أ'],
-      'odd': 'أ',
-      'explanation': 'حرف الألف (أ) من الحروف الأبجدية، بينما ١ و ٥ و ٩ أرقام حسابية!',
-    },
-    {
-      'category': 'مصادر الضوء والظلام',
-      'visualTheme': 2,
-      'title': '١٥. أي عنصر لا يضيء ولا يمنحنا النور؟',
-      'items': ['💡', '🕯️', '🔦', '🪨'],
-      'odd': '🪨',
-      'explanation': 'الصخرة جسم معتم لا يضيء، بينما المصباح والشمعة والكشاف مصادر للضوء!',
-    },
-    {
-      'category': 'الأطباء والمهن',
-      'visualTheme': 3,
-      'title': '١٦. أي غرض لا ينتمي لحقيبة الطبيب المعالج؟',
-      'items': ['🩺', '🩹', '🌡️', '🍳'],
-      'odd': '🍳',
-      'explanation': 'المقلاة من أدوات الطباخ في المطبخ، أما السماعة والضمادة وميزان الحرارة فللطبيب!',
-    },
-  ];
-
-  static const List<Map<String, dynamic>> _patternQuestions = [
-    {
-      'sequence': ['🌙', '⭐', '🌙', '⭐', '🌙'],
-      'options': ['⭐', '☀️', '🍎', '🚗'],
-      'answer': '⭐',
-      'hint': '١. هلال ثم نجمة ثم هلال ثم نجمة... ماذا يأتي بعد الهلال؟',
-    },
-    {
-      'sequence': ['🟥', '🟦', '🟥', '🟦', '🟥'],
-      'options': ['🟩', '🟦', '🟨', '🟪'],
-      'answer': '🟦',
-      'hint': '٢. أحمر ثم أزرق ثم أحمر ثم أزرق... ما هو اللون التالي؟',
-    },
-    {
-      'sequence': ['🌱', '🌿', '🌳', '🌱', '🌿'],
-      'options': ['🌳', '🍎', '🦋', '🎈'],
-      'answer': '🌳',
-      'hint': '٣. بذرة صغيرة ثم نبتة ثم شجرة كبيرة... ما الذي يكمل الدورة؟',
-    },
-    {
-      'sequence': ['🐱', '🐱', '🐰', '🐱', '🐱'],
-      'options': ['🦁', '🐰', '🐸', '🐼'],
-      'answer': '🐰',
-      'hint': '٤. قطتان ثم أرنب، قطتان ثم... ماذا؟',
-    },
-    {
-      'sequence': ['🍎', '🍌', '🍇', '🍎', '🍌'],
-      'options': ['🍉', '🍇', '🍓', '🍒'],
-      'answer': '🍇',
-      'hint': '٥. تفاحة، موزة، عنب — تفاحة، موزة، ثم ماذا؟',
-    },
-    {
-      'sequence': ['⬆️', '➡️', '⬇️', '⬅️', '⬆️'],
-      'options': ['➡️', '⬆️', '⬇️', '⬅️'],
-      'answer': '➡️',
-      'hint': '٦. السهم يدور مع عقارب الساعة: أعلى، يمين، أسفل، يسار، أعلى... ثم؟',
-    },
-    {
-      'sequence': ['🐣', '🐥', '🐓', '🐣', '🐥'],
-      'options': ['🐓', '🦅', '🦆', '🦉'],
-      'answer': '🐓',
-      'hint': '٧. كتكوت يفقس ثم يكبر ثم يصبح دجاجة كاملة!',
-    },
-    {
-      'sequence': ['🔵', '🔵', '🟡', '🔵', '🔵'],
-      'options': ['🔴', '🟡', '🟢', '🟣'],
-      'answer': '🟡',
-      'hint': '٨. دائرتان زرقاوان ثم دائرة صفراء، دائرتان زرقاوان ثم ماذا؟',
-    },
-    {
-      'sequence': ['☀️', '🌤️', '🌙', '☀️', '🌤️'],
-      'options': ['🌙', '⭐', '⚡', '🌈'],
-      'answer': '🌙',
-      'hint': '٩. صباح مشرق، ثم عصر، ثم ليل وهدوء!',
-    },
-    {
-      'sequence': ['🚗', '🚌', '🚂', '🚗', '🚌'],
-      'options': ['🚲', '🚂', '✈️', '🚢'],
-      'answer': '🚂',
-      'hint': '١٠. سيارة صغيرة ثم حافلة متوسطة ثم قطار طويل!',
-    },
-    {
-      'sequence': ['🔺', '🔷', '🔺', '🔷', '🔺'],
-      'options': ['🔷', '⬛', '⚪', '⭐'],
-      'answer': '🔷',
-      'hint': '١١. مثلث أحمر ثم معين أزرق بالتبادل!',
-    },
-    {
-      'sequence': ['🐝', '🌸', '🍯', '🐝', '🌸'],
-      'options': ['🍯', '🦋', '🍃', '🍎'],
-      'answer': '🍯',
-      'hint': '١٢. نحلة تزور الزهرة فتصنع لنا العسل اللذيذ!',
-    },
-  ];
-
-  static const List<Map<String, dynamic>> _arabicWordQuestions = [
-    {
-      'emoji': '🦁',
-      'word': 'أَسَد',
-      'missingDisplay': 'ـسَد',
-      'prompt': '١. اختر الحرف الأول لكلمة (أَسَد):',
-      'options': ['أ', 'ب', 'ت', 'س'],
-      'answer': 'أ',
-    },
-    {
-      'emoji': '🍎',
-      'word': 'تُفَّاحَة',
-      'missingDisplay': 'ـفَّاحَة',
-      'prompt': '٢. اختر الحرف الأول لكلمة (تُفَّاحَة):',
-      'options': ['ج', 'ت', 'خ', 'م'],
-      'answer': 'ت',
-    },
-    {
-      'emoji': '🌙',
-      'word': 'قَمَر',
-      'missingDisplay': 'ـمَر',
-      'prompt': '٣. اختر الحرف الأول لكلمة (قَمَر):',
-      'options': ['ف', 'ق', 'ك', 'ل'],
-      'answer': 'ق',
-    },
-    {
-      'emoji': '🦋',
-      'word': 'فَرَاشَة',
-      'missingDisplay': 'ـرَاشَة',
-      'prompt': '٤. اختر الحرف الأول لكلمة (فَرَاشَة):',
-      'options': ['ص', 'ض', 'ف', 'ن'],
-      'answer': 'ف',
-    },
-    {
-      'emoji': '🐪',
-      'word': 'جَمَل',
-      'missingDisplay': 'ـمَل',
-      'prompt': '٥. اختر الحرف الأول لكلمة (جَمَل):',
-      'options': ['ج', 'ح', 'خ', 'ع'],
-      'answer': 'ج',
-    },
-    {
-      'emoji': '🐟',
-      'word': 'سَمَكَة',
-      'missingDisplay': 'ـمَكَة',
-      'prompt': '٦. اختر الحرف الأول لكلمة (سَمَكَة):',
-      'options': ['ش', 'س', 'ص', 'ز'],
-      'answer': 'س',
-    },
-    {
-      'emoji': '☀️',
-      'word': 'شَمْس',
-      'missingDisplay': 'ـمْس',
-      'prompt': '٧. اختر الحرف الأول لكلمة (شَمْس):',
-      'options': ['س', 'ش', 'ص', 'ض'],
-      'answer': 'ش',
-    },
-    {
-      'emoji': '🌹',
-      'word': 'وَرْدَة',
-      'missingDisplay': 'ـرْدَة',
-      'prompt': '٨. اختر الحرف الأول لكلمة (وَرْدَة):',
-      'options': ['ر', 'ز', 'و', 'ي'],
-      'answer': 'و',
-    },
-    {
-      'emoji': '📘',
-      'word': 'كِتَاب',
-      'missingDisplay': 'ـتَاب',
-      'prompt': '٩. اختر الحرف الأول لكلمة (كِتَاب):',
-      'options': ['ق', 'ك', 'ل', 'م'],
-      'answer': 'ك',
-    },
-    {
-      'emoji': '🐝',
-      'word': 'نَحْلَة',
-      'missingDisplay': 'ـحْلَة',
-      'prompt': '١٠. اختر الحرف الأول لكلمة (نَحْلَة):',
-      'options': ['ب', 'ت', 'ن', 'ي'],
-      'answer': 'ن',
-    },
-    {
-      'emoji': '🐘',
-      'word': 'فِيل',
-      'missingDisplay': 'ـيل',
-      'prompt': '١١. اختر الحرف الأول لكلمة (فِيل):',
-      'options': ['ف', 'ق', 'و', 'هـ'],
-      'answer': 'ف',
-    },
-    {
-      'emoji': '🏠',
-      'word': 'بَيْت',
-      'missingDisplay': 'ـيْت',
-      'prompt': '١٢. اختر الحرف الأول لكلمة (بَيْت):',
-      'options': ['ب', 'ت', 'ث', 'ن'],
-      'answer': 'ب',
-    },
-  ];
-
   @override
   void initState() {
     super.initState();
     _initMemoryGame();
-    _generateMathRound();
     widget.appState.logChildRealtimeActivity(
-      statusSummary: '🧠 يتفاعل داخل واحة ألعاب الذكاء والآداب',
-      actionLogText: 'دخل إلى واحة ألعاب الذكاء وتنمية القدرات والآداب',
+      statusSummary: '🧠 يتفاعل داخل واحة الـ ١٠٠ مرحلة لألعاب الذكاء والآداب',
+      actionLogText: 'دخل إلى واحة ألعاب الذكاء (١٠٠ مرحلة لكل لعبة)',
       categoryBadge: 'ألعاب الذكاء',
     );
     final childName =
         widget.appState.currentAccount?.activeChild.name ?? 'بطل حنين';
     CalmVoiceService.instance.speakCalmly(
-      'أهلاً بك يا $childName في واحة ألعاب الذكاء ورسم الآداب! اختر اللعبة التي تحبها.',
+      'أهلاً بك يا $childName! كل لعبة هنا تحتوي على مئة مرحلة مشوقة، وأصدقاؤك الأبطال الخارقون يشجعونك في كل خطوة!',
     );
   }
 
   void _initMemoryGame() {
-    final List<List<String>> levelThemes = [
-      ['🦁', '🦁', '🦋', '🦋', '🌙', '🌙', '🍎', '🍎', '🚀', '🚀', '🐬', '🐬'],
-      ['🌸', '🌸', '🐢', '🐢', '🎈', '🎈', '🍓', '🍓', '⛵', '⛵', '🦉', '🦉'],
-      ['👑', '👑', '💎', '💎', '🌈', '🌈', '🍉', '🍉', '🚁', '🚁', '🐼', '🐼'],
-    ];
     final List<String> pairs =
-        List<String>.from(levelThemes[(_memoryLevel - 1) % levelThemes.length]);
-    pairs.shuffle(Random());
+        HundredLevelGamesGenerator.getMemoryBoardForLevel(_memoryLevel);
     setState(() {
       _memoryBoard = pairs;
       _memoryRevealed = List<bool>.filled(pairs.length, false);
@@ -8963,28 +9390,23 @@ class _BrainGamesHubScreenState extends State<BrainGamesHubScreen> {
       if (_memoryMatches == _memoryBoard.length ~/ 2) {
         await widget.appState.recordBrainGameWin(
           gameId: 'memory_match_lvl_$_memoryLevel',
-          gameTitle: 'لعبة الذاكرة البصرية (المستوى $_memoryLevel)',
+          gameTitle: 'الذاكرة البصرية (المرحلة $_memoryLevel من ١٠٠)',
           earnedIqPoints: 20,
           earnedStars: 2,
         );
+        setState(() {
+          _heroReactionMessage =
+              '🎉 الأبطال الخارقون يصفقون لك! أتممت المرحلة $_memoryLevel من ١٠٠ في لعبة الذاكرة!';
+        });
         CalmVoiceService.instance.speakCalmly(
-          'ما شاء الله! أنهيت المستوى $_memoryLevel في لعبة الذاكرة البصرية بنجاح!',
+          'ما شاء الله! أنهيت المرحلة $_memoryLevel من مئة في لعبة الذاكرة البصرية بنجاح!',
         );
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(
-                  '🎉 بطل الذاكرة! أنهيت المستوى $_memoryLevel وربحت +20 نقطة ذكاء!'),
-              backgroundColor: const Color(0xFF14B8A6),
-            ),
-          );
-        }
       } else {
         CalmVoiceService.instance.speakCalmly('تطابق رائع!');
       }
     } else {
       _memoryBusy = true;
-      await Future.delayed(const Duration(milliseconds: 700));
+      await Future.delayed(const Duration(milliseconds: 650));
       if (mounted) {
         setState(() {
           _memoryRevealed[firstIdx] = false;
@@ -8995,35 +9417,69 @@ class _BrainGamesHubScreenState extends State<BrainGamesHubScreen> {
     }
   }
 
-  void _generateMathRound() {
-    final random = Random();
-    final List<String> emojis = ['🍎', '⭐', '🦋', '🎈', '🍓', '🐠', '🌸', '🐣'];
-    final String mode = (_mathRoundNumber % 2 == 1) ? 'count' : 'add';
-    int target;
-    int a = 2;
-    int b = 2;
-    if (mode == 'count') {
-      target = random.nextInt(8) + 2;
-    } else {
-      a = random.nextInt(5) + 1;
-      b = random.nextInt(5) + 1;
-      target = a + b;
-    }
-    final Set<int> opts = {target};
-    while (opts.length < 4) {
-      opts.add(random.nextInt(10) + 1);
-    }
-    final List<int> shuffled = opts.toList()..shuffle(random);
-    setState(() {
-      _mathMode = mode;
-      _mathAddendA = a;
-      _mathAddendB = b;
-      _mathTargetCount = target;
-      _mathEmoji = emojis[random.nextInt(emojis.length)];
-      _mathOptions = shuffled;
-      _mathFeedback = null;
-      _mathAnswered = false;
-    });
+  Widget _buildHundredLevelSelectorBar({
+    required int currentLevelZeroBased,
+    required Color accentColor,
+    required void Function(int newZeroBasedIndex) onSelectLevel,
+  }) {
+    final int currentDisplay = (currentLevelZeroBased % 100) + 1;
+    return Column(
+      children: [
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Text(
+              '🏆 المرحلة $currentDisplay من ١٠٠',
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.bold,
+                color: accentColor,
+              ),
+            ),
+            Row(
+              children: [
+                IconButton(
+                  visualDensity: VisualDensity.compact,
+                  onPressed: () {
+                    final int prev = (currentLevelZeroBased - 1 + 100) % 100;
+                    onSelectLevel(prev);
+                  },
+                  icon: const Icon(Icons.arrow_back_ios_new, size: 15),
+                ),
+                Text(
+                  '$currentDisplay / 100',
+                  style: const TextStyle(
+                      fontSize: 12, fontWeight: FontWeight.bold),
+                ),
+                IconButton(
+                  visualDensity: VisualDensity.compact,
+                  onPressed: () {
+                    final int next = (currentLevelZeroBased + 1) % 100;
+                    onSelectLevel(next);
+                  },
+                  icon: const Icon(Icons.arrow_forward_ios, size: 15),
+                ),
+              ],
+            ),
+          ],
+        ),
+        SliderTheme(
+          data: SliderTheme.of(context).copyWith(
+            trackHeight: 5,
+            thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 7),
+          ),
+          child: Slider(
+            value: currentDisplay.toDouble(),
+            min: 1,
+            max: 100,
+            divisions: 99,
+            activeColor: accentColor,
+            label: 'المرحلة $currentDisplay',
+            onChanged: (v) => onSelectLevel(v.round() - 1),
+          ),
+        ),
+      ],
+    );
   }
 
   @override
@@ -9036,39 +9492,39 @@ class _BrainGamesHubScreenState extends State<BrainGamesHubScreen> {
 
         final List<Map<String, dynamic>> gamesMeta = [
           {
-            'title': 'مرسم الآداب والأخلاق',
+            'title': 'مرسم الآداب (١٠٠ لوحة)',
             'icon': '🎨',
-            'skill': 'رسم حر وتلوين مع تعلم الآداب الإسلامية والتربوية',
+            'skill': '١٠٠ لوحة رسم وتلوين لتعلم الآداب والأخلاق',
             'color': const Color(0xFF10B981),
           },
           {
-            'title': 'قوة الملاحظة (١٦ مرحلة)',
+            'title': 'قوة الملاحظة (١٠٠ مرحلة)',
             'icon': '🔍',
-            'skill': '١٦ تحدياً متنوعاً للتصنيف واكتشاف المختلف',
+            'skill': '١٠٠ مرحلة لتصنيف الأشكال واكتشاف المختلف',
             'color': const Color(0xFFEC4899),
           },
           {
-            'title': 'الألغاز والمنطق (١٢ لغزاً)',
+            'title': 'الألغاز والمنطق (١٠٠ لغز)',
             'icon': '🧩',
-            'skill': 'استنتاج الأنماط والتسلسل المنطقي',
+            'skill': '١٠٠ لغز لاستنتاج الأنماط والتسلسل المنطقي',
             'color': const Color(0xFFF59E0B),
           },
           {
-            'title': 'الذاكرة البصرية المتدرجة',
+            'title': 'الذاكرة البصرية (١٠٠ مرحلة)',
             'icon': '🃏',
-            'skill': 'تقوية التركيز والذاكرة قصيرة المدى',
+            'skill': '١٠٠ مستوى متدرج لتقوية الذاكرة والتركيز',
             'color': const Color(0xFF14B8A6),
           },
           {
-            'title': 'الحساب والجمع البصري',
+            'title': 'الحساب والجمع (١٠٠ مرحلة)',
             'icon': '🔢',
-            'skill': 'العدّ والجمع المصور لتنمية الذكاء الرياضي',
+            'skill': '١٠٠ مسألة عدّ وجمع بصري لتنمية الذكاء الرياضي',
             'color': const Color(0xFF38BDF8),
           },
           {
-            'title': 'الحروف والكلمات (١٢ كلمة)',
+            'title': 'الحروف والكلمات (١٠٠ مرحلة)',
             'icon': '🔤',
-            'skill': 'تنمية الذكاء اللغوي ومخارج الحروف العربية',
+            'skill': '١٠٠ تحدٍ للذكاء اللغوي ومخارج الحروف العربية',
             'color': const Color(0xFFA855F7),
           },
         ];
@@ -9077,8 +9533,8 @@ class _BrainGamesHubScreenState extends State<BrainGamesHubScreen> {
           appBar: AppBar(
             backgroundColor: const Color(0xFF1E293B),
             title: const Text(
-              '🧠 واحة ألعاب الذكاء ومرسم الآداب',
-              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+              '🧠 واحة الـ ١٠٠ مرحلة والأبطال الخارقين',
+              style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
             ),
             actions: [
               IconButton(
@@ -9109,50 +9565,15 @@ class _BrainGamesHubScreenState extends State<BrainGamesHubScreen> {
               child: Column(
                 children: [
                   Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 10, 16, 6),
-                    child: Container(
-                      padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF1E293B),
-                        borderRadius: BorderRadius.circular(18),
-                        border: Border.all(
-                            color: const Color(0xFFA855F7).withOpacity(0.6)),
-                      ),
-                      child: Row(
-                        children: [
-                          Text(child.chosenAvatar,
-                              style: const TextStyle(fontSize: 34)),
-                          const SizedBox(width: 10),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  'البطل المبدع: ${child.name}',
-                                  style: const TextStyle(
-                                    fontSize: 15,
-                                    fontWeight: FontWeight.bold,
-                                    color: Colors.white,
-                                  ),
-                                ),
-                                const SizedBox(height: 3),
-                                Text(
-                                  'نقاط الذكاء: 🧠 ${child.intelligencePoints} • النجوم: ⭐ ${child.starsEarned} • الألعاب المنجزة: ${child.gamesCompletedCount}',
-                                  style: const TextStyle(
-                                    fontSize: 11,
-                                    color: Color(0xFFFDE68A),
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ],
-                      ),
+                    padding: const EdgeInsets.fromLTRB(14, 8, 14, 4),
+                    child: CuteSuperheroCompanionBanner(
+                      appState: widget.appState,
+                      compactMode: false,
+                      customCheerMessage: _heroReactionMessage,
                     ),
                   ),
                   SizedBox(
-                    height: 84,
+                    height: 80,
                     child: ListView.builder(
                       scrollDirection: Axis.horizontal,
                       padding: const EdgeInsets.symmetric(horizontal: 12),
@@ -9163,7 +9584,10 @@ class _BrainGamesHubScreenState extends State<BrainGamesHubScreen> {
                         final Color accent = g['color'] as Color;
                         return GestureDetector(
                           onTap: () {
-                            setState(() => _selectedGameIndex = i);
+                            setState(() {
+                              _selectedGameIndex = i;
+                              _heroReactionMessage = null;
+                            });
                             widget.appState.logChildRealtimeActivity(
                               statusSummary: '🎮 يلعب الآن: ${g['title']}',
                               actionLogText: 'انتقل إلى لعبة (${g['title']})',
@@ -9175,10 +9599,10 @@ class _BrainGamesHubScreenState extends State<BrainGamesHubScreen> {
                           },
                           child: AnimatedContainer(
                             duration: const Duration(milliseconds: 220),
-                            width: 152,
+                            width: 158,
                             margin: const EdgeInsets.symmetric(
                                 horizontal: 5, vertical: 4),
-                            padding: const EdgeInsets.all(10),
+                            padding: const EdgeInsets.all(9),
                             decoration: BoxDecoration(
                               gradient: isSelected
                                   ? LinearGradient(
@@ -9202,14 +9626,14 @@ class _BrainGamesHubScreenState extends State<BrainGamesHubScreen> {
                               mainAxisAlignment: MainAxisAlignment.center,
                               children: [
                                 Text(g['icon'] as String,
-                                    style: const TextStyle(fontSize: 24)),
+                                    style: const TextStyle(fontSize: 22)),
                                 const SizedBox(height: 4),
                                 Text(
                                   g['title'] as String,
                                   maxLines: 1,
                                   overflow: TextOverflow.ellipsis,
                                   style: const TextStyle(
-                                    fontSize: 12,
+                                    fontSize: 11,
                                     fontWeight: FontWeight.bold,
                                     color: Colors.white,
                                   ),
@@ -9223,7 +9647,7 @@ class _BrainGamesHubScreenState extends State<BrainGamesHubScreen> {
                   ),
                   Expanded(
                     child: SingleChildScrollView(
-                      padding: const EdgeInsets.all(16),
+                      padding: const EdgeInsets.all(14),
                       child: _buildActiveBrainGameCard(),
                     ),
                   ),
@@ -9256,8 +9680,9 @@ class _BrainGamesHubScreenState extends State<BrainGamesHubScreen> {
   }
 
   Widget _buildEtiquetteDrawingStudioGame() {
-    final lesson = _etiquetteDrawingLessons[
-        _etiquetteBoardIndex % _etiquetteDrawingLessons.length];
+    final lesson = HundredLevelGamesGenerator.getEtiquetteDrawingLevel(
+        _etiquetteBoardIndex);
+    final int levelNum = lesson['levelNumber'] as int;
     final String title = lesson['title'] as String;
     final String badge = lesson['badge'] as String;
     final String etiquetteText = lesson['etiquetteLesson'] as String;
@@ -9276,7 +9701,7 @@ class _BrainGamesHubScreenState extends State<BrainGamesHubScreen> {
     ];
 
     return Container(
-      padding: const EdgeInsets.all(18),
+      padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         gradient: const LinearGradient(
           colors: [Color(0xFF064E3B), Color(0xFF1E293B)],
@@ -9289,6 +9714,17 @@ class _BrainGamesHubScreenState extends State<BrainGamesHubScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          _buildHundredLevelSelectorBar(
+            currentLevelZeroBased: _etiquetteBoardIndex,
+            accentColor: const Color(0xFF10B981),
+            onSelectLevel: (newIdx) {
+              setState(() {
+                _etiquetteBoardIndex = newIdx;
+                _drawingStrokes.clear();
+                _drawnPointsCount = 0;
+              });
+            },
+          ),
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
@@ -9300,7 +9736,7 @@ class _BrainGamesHubScreenState extends State<BrainGamesHubScreen> {
                   borderRadius: BorderRadius.circular(12),
                 ),
                 child: Text(
-                  '🎨 $badge (${(_etiquetteBoardIndex % _etiquetteDrawingLessons.length) + 1}/${_etiquetteDrawingLessons.length})',
+                  '🎨 $badge ($levelNum / 100)',
                   style: const TextStyle(
                     fontSize: 12,
                     fontWeight: FontWeight.bold,
@@ -9321,11 +9757,11 @@ class _BrainGamesHubScreenState extends State<BrainGamesHubScreen> {
               ),
             ],
           ),
-          const SizedBox(height: 6),
+          const SizedBox(height: 4),
           Text(
             title,
             style: const TextStyle(
-              fontSize: 18,
+              fontSize: 16,
               fontWeight: FontWeight.bold,
               color: Colors.white,
             ),
@@ -9346,19 +9782,20 @@ class _BrainGamesHubScreenState extends State<BrainGamesHubScreen> {
             decoration: BoxDecoration(
               color: Colors.black26,
               borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: const Color(0xFFF59E0B).withOpacity(0.5)),
+              border:
+                  Border.all(color: const Color(0xFFF59E0B).withOpacity(0.5)),
             ),
             child: Text(
               '🗣️ عبارة الأدب: $phrase',
               textAlign: TextAlign.center,
               style: const TextStyle(
-                fontSize: 14,
+                fontSize: 13,
                 fontWeight: FontWeight.bold,
                 color: Color(0xFFFDE68A),
               ),
             ),
           ),
-          const SizedBox(height: 10),
+          const SizedBox(height: 8),
           Text(
             '✏️ $instruction',
             style: const TextStyle(fontSize: 12, color: Colors.white),
@@ -9367,7 +9804,7 @@ class _BrainGamesHubScreenState extends State<BrainGamesHubScreen> {
           ClipRRect(
             borderRadius: BorderRadius.circular(20),
             child: Container(
-              height: 250,
+              height: 230,
               width: double.infinity,
               decoration: BoxDecoration(
                 color: const Color(0xFF0F172A),
@@ -9395,7 +9832,7 @@ class _BrainGamesHubScreenState extends State<BrainGamesHubScreen> {
                   });
                 },
                 child: CustomPaint(
-                  size: const Size(double.infinity, 250),
+                  size: const Size(double.infinity, 230),
                   painter: EtiquetteDrawingCanvasPainter(
                     strokes: _drawingStrokes,
                     templateIndex: _etiquetteBoardIndex,
@@ -9404,7 +9841,7 @@ class _BrainGamesHubScreenState extends State<BrainGamesHubScreen> {
               ),
             ),
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: 10),
           Row(
             children: [
               const Text('الألوان: ', style: TextStyle(fontSize: 12)),
@@ -9417,8 +9854,8 @@ class _BrainGamesHubScreenState extends State<BrainGamesHubScreen> {
                     return GestureDetector(
                       onTap: () => setState(() => _selectedBrushColor = c),
                       child: Container(
-                        width: 28,
-                        height: 28,
+                        width: 26,
+                        height: 26,
                         decoration: BoxDecoration(
                           color: c,
                           shape: BoxShape.circle,
@@ -9445,7 +9882,6 @@ class _BrainGamesHubScreenState extends State<BrainGamesHubScreen> {
               ),
             ],
           ),
-          const SizedBox(height: 8),
           Row(
             children: [
               const Text('حجم الفرشاة:', style: TextStyle(fontSize: 12)),
@@ -9460,7 +9896,6 @@ class _BrainGamesHubScreenState extends State<BrainGamesHubScreen> {
               ),
             ],
           ),
-          const SizedBox(height: 8),
           Row(
             children: [
               Expanded(
@@ -9474,7 +9909,7 @@ class _BrainGamesHubScreenState extends State<BrainGamesHubScreen> {
                     ),
                   ),
                   onPressed: () async {
-                    if (_drawnPointsCount < 8) {
+                    if (_drawnPointsCount < 6) {
                       ScaffoldMessenger.of(context).showSnackBar(
                         const SnackBar(
                           content: Text(
@@ -9485,27 +9920,22 @@ class _BrainGamesHubScreenState extends State<BrainGamesHubScreen> {
                       return;
                     }
                     await widget.appState.recordBrainGameWin(
-                      gameId: 'etiquette_draw_$_etiquetteBoardIndex',
-                      gameTitle: 'مرسم الآداب ($title)',
+                      gameId: 'etiquette_draw_$levelNum',
+                      gameTitle: 'مرسم الآداب (لوحة $levelNum من ١٠٠)',
                       earnedIqPoints: 20,
                       earnedStars: 2,
                     );
+                    setState(() {
+                      _heroReactionMessage =
+                          '🌟 الأبطال الخارقون فخورون بلوحتك رقم $levelNum وتعلمك لعبارة: $phrase!';
+                    });
                     CalmVoiceService.instance.speakCalmly(
-                      'لوحة فنية رائعة يا فنان الآداب! تعلمت اليوم: $phrase، وربحت عشرين نقطة ذكاء ونجمتين!',
+                      'لوحة فنية رائعة يا فنان الآداب! أتممت اللوحة رقم $levelNum من مئة!',
                     );
-                    if (mounted) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content: Text(
-                              '🌟 فنان مؤدب! ربحت +20 نقطة ذكاء و +2 نجمة!'),
-                          backgroundColor: Color(0xFF10B981),
-                        ),
-                      );
-                    }
                   },
                   icon: const Icon(Icons.check_circle_outline),
                   label: const Text(
-                    'أنهيت الرسم وتعلمت الأدب (+20 ذكاء)',
+                    'حفظ الرسمة (+20 ذكاء)',
                     style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
                   ),
                 ),
@@ -9514,15 +9944,10 @@ class _BrainGamesHubScreenState extends State<BrainGamesHubScreen> {
               OutlinedButton.icon(
                 onPressed: () {
                   setState(() {
-                    _etiquetteBoardIndex++;
+                    _etiquetteBoardIndex = (_etiquetteBoardIndex + 1) % 100;
                     _drawingStrokes.clear();
                     _drawnPointsCount = 0;
                   });
-                  final nextLesson = _etiquetteDrawingLessons[
-                      _etiquetteBoardIndex % _etiquetteDrawingLessons.length];
-                  CalmVoiceService.instance.speakCalmly(
-                    '${nextLesson['title']}. ${nextLesson['etiquetteLesson']}',
-                  );
                 },
                 icon: const Icon(Icons.navigate_next),
                 label: const Text('اللوحة التالية'),
@@ -9535,8 +9960,8 @@ class _BrainGamesHubScreenState extends State<BrainGamesHubScreen> {
   }
 
   Widget _buildOddOneOutGame() {
-    final int idx = _oddQuestionIndex % _oddOneOutQuestions.length;
-    final q = _oddOneOutQuestions[idx];
+    final q = HundredLevelGamesGenerator.getOddOneOutLevel(_oddQuestionIndex);
+    final int levelNum = q['levelNumber'] as int;
     final String category = q['category'] as String;
     final int themeIdx = q['visualTheme'] as int;
     final String title = q['title'] as String;
@@ -9560,7 +9985,7 @@ class _BrainGamesHubScreenState extends State<BrainGamesHubScreen> {
     final Color activeBorder = themeBorders[themeIdx % themeBorders.length];
 
     return Container(
-      padding: const EdgeInsets.all(18),
+      padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         gradient: LinearGradient(
           colors: themeGradients[themeIdx % themeGradients.length],
@@ -9572,18 +9997,23 @@ class _BrainGamesHubScreenState extends State<BrainGamesHubScreen> {
       ),
       child: Column(
         children: [
+          _buildHundredLevelSelectorBar(
+            currentLevelZeroBased: _oddQuestionIndex,
+            accentColor: activeBorder,
+            onSelectLevel: (newIdx) {
+              setState(() {
+                _oddQuestionIndex = newIdx;
+                _oddCorrect = false;
+                _oddFeedback = null;
+              });
+            },
+          ),
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                decoration: BoxDecoration(
-                  color: activeBorder.withOpacity(0.22),
-                  borderRadius: BorderRadius.circular(12),
-                ),
+              Expanded(
                 child: Text(
-                  '🔍 $category — السؤال ${idx + 1} من ${_oddOneOutQuestions.length}',
+                  '🔍 $category',
                   style: TextStyle(
                     fontSize: 12,
                     fontWeight: FontWeight.bold,
@@ -9597,25 +10027,17 @@ class _BrainGamesHubScreenState extends State<BrainGamesHubScreen> {
               ),
             ],
           ),
-          const SizedBox(height: 8),
-          LinearProgressIndicator(
-            value: (idx + 1) / _oddOneOutQuestions.length,
-            backgroundColor: Colors.white12,
-            color: activeBorder,
-            minHeight: 6,
-            borderRadius: BorderRadius.circular(8),
-          ),
-          const SizedBox(height: 12),
+          const SizedBox(height: 6),
           Text(
             title,
             textAlign: TextAlign.center,
             style: const TextStyle(
-              fontSize: 16,
+              fontSize: 15,
               fontWeight: FontWeight.bold,
               color: Colors.white,
             ),
           ),
-          const SizedBox(height: 18),
+          const SizedBox(height: 14),
           GridView.builder(
             shrinkWrap: true,
             physics: const NeverScrollableScrollPhysics(),
@@ -9628,22 +10050,24 @@ class _BrainGamesHubScreenState extends State<BrainGamesHubScreen> {
             itemCount: items.length,
             itemBuilder: (ctx, i) {
               final String itemEmoji = items[i];
-              final bool isHexagonTheme = themeIdx % 2 == 1;
+              final bool isRoundedTheme = themeIdx % 2 == 1;
               return GestureDetector(
                 onTap: () async {
                   if (itemEmoji == odd) {
                     setState(() {
                       _oddCorrect = true;
                       _oddFeedback = '✅ ملاحظة ذكية جداً! $explanation';
+                      _heroReactionMessage =
+                          '🦸‍♂️ سبايدي وفارس الليل يقولان لك: قوة ملاحظتك خارقة في المرحلة $levelNum!';
                     });
                     await widget.appState.recordBrainGameWin(
-                      gameId: 'odd_one_out_$idx',
-                      gameTitle: 'قوة الملاحظة ($category)',
+                      gameId: 'odd_one_out_$levelNum',
+                      gameTitle: 'قوة الملاحظة (المرحلة $levelNum من ١٠٠)',
                       earnedIqPoints: 15,
                       earnedStars: 1,
                     );
                     CalmVoiceService.instance.speakCalmly(
-                      'أحسنت الملاحظة! $explanation',
+                      'أحسنت الملاحظة في المرحلة $levelNum! $explanation',
                     );
                   } else {
                     setState(() {
@@ -9662,26 +10086,20 @@ class _BrainGamesHubScreenState extends State<BrainGamesHubScreen> {
                     gradient: LinearGradient(
                       colors: [
                         const Color(0xFF0F172A),
-                        activeBorder.withOpacity(0.15),
+                        activeBorder.withOpacity(0.18),
                       ],
                     ),
-                    borderRadius: BorderRadius.circular(isHexagonTheme ? 34 : 18),
+                    borderRadius:
+                        BorderRadius.circular(isRoundedTheme ? 34 : 18),
                     border: Border.all(
                       color: activeBorder.withOpacity(0.65),
                       width: 2,
                     ),
-                    boxShadow: [
-                      BoxShadow(
-                        color: activeBorder.withOpacity(0.15),
-                        blurRadius: 8,
-                        offset: const Offset(0, 4),
-                      ),
-                    ],
                   ),
                   child: Center(
                     child: Text(
                       itemEmoji,
-                      style: const TextStyle(fontSize: 44),
+                      style: const TextStyle(fontSize: 42),
                     ),
                   ),
                 ),
@@ -9689,50 +10107,39 @@ class _BrainGamesHubScreenState extends State<BrainGamesHubScreen> {
             },
           ),
           if (_oddFeedback != null) ...[
-            const SizedBox(height: 14),
-            Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: Colors.black26,
-                borderRadius: BorderRadius.circular(14),
-              ),
-              child: Text(
-                _oddFeedback!,
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  fontWeight: FontWeight.bold,
-                  color: _oddCorrect
-                      ? const Color(0xFF14B8A6)
-                      : const Color(0xFFF59E0B),
-                ),
+            const SizedBox(height: 12),
+            Text(
+              _oddFeedback!,
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontWeight: FontWeight.bold,
+                color: _oddCorrect
+                    ? const Color(0xFF14B8A6)
+                    : const Color(0xFFF59E0B),
               ),
             ),
           ],
-          const SizedBox(height: 16),
-          Row(
-            children: [
-              Expanded(
-                child: ElevatedButton.icon(
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: activeBorder,
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(vertical: 12),
-                  ),
-                  onPressed: () {
-                    setState(() {
-                      _oddQuestionIndex++;
-                      _oddCorrect = false;
-                      _oddFeedback = null;
-                    });
-                  },
-                  icon: const Icon(Icons.navigate_next),
-                  label: Text(
-                    'التحدي التالي (${((idx + 1) % _oddOneOutQuestions.length) + 1}/${_oddOneOutQuestions.length})',
-                    style: const TextStyle(fontWeight: FontWeight.bold),
-                  ),
-                ),
+          const SizedBox(height: 14),
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton.icon(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: activeBorder,
+                foregroundColor: Colors.white,
               ),
-            ],
+              onPressed: () {
+                setState(() {
+                  _oddQuestionIndex = (_oddQuestionIndex + 1) % 100;
+                  _oddCorrect = false;
+                  _oddFeedback = null;
+                });
+              },
+              icon: const Icon(Icons.navigate_next),
+              label: Text(
+                'المرحلة التالية (${(levelNum % 100) + 1} من ١٠٠)',
+                style: const TextStyle(fontWeight: FontWeight.bold),
+              ),
+            ),
           ),
         ],
       ),
@@ -9740,15 +10147,16 @@ class _BrainGamesHubScreenState extends State<BrainGamesHubScreen> {
   }
 
   Widget _buildPatternLogicGame() {
-    final int idx = _patternQuestionIndex % _patternQuestions.length;
-    final q = _patternQuestions[idx];
+    final q =
+        HundredLevelGamesGenerator.getPatternLogicLevel(_patternQuestionIndex);
+    final int levelNum = q['levelNumber'] as int;
     final List<String> seq = List<String>.from(q['sequence'] as List);
     final List<String> opts = List<String>.from(q['options'] as List);
     final String ans = q['answer'] as String;
     final String hint = q['hint'] as String;
 
     return Container(
-      padding: const EdgeInsets.all(18),
+      padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: const Color(0xFF1E293B),
         borderRadius: BorderRadius.circular(22),
@@ -9757,14 +10165,25 @@ class _BrainGamesHubScreenState extends State<BrainGamesHubScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
+          _buildHundredLevelSelectorBar(
+            currentLevelZeroBased: _patternQuestionIndex,
+            accentColor: const Color(0xFFF59E0B),
+            onSelectLevel: (newIdx) {
+              setState(() {
+                _patternQuestionIndex = newIdx;
+                _patternFeedback = null;
+                _patternCorrect = false;
+              });
+            },
+          ),
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               Expanded(
                 child: Text(
-                  '🧩 مختبر المنطق (${idx + 1} من ${_patternQuestions.length})',
+                  '🧩 مختبر المنطق والأنماط ($levelNum / 100)',
                   style: const TextStyle(
-                      fontSize: 17, fontWeight: FontWeight.bold),
+                      fontSize: 16, fontWeight: FontWeight.bold),
                 ),
               ),
               IconButton(
@@ -9780,9 +10199,9 @@ class _BrainGamesHubScreenState extends State<BrainGamesHubScreen> {
             textAlign: TextAlign.center,
             style: const TextStyle(fontSize: 13, color: Colors.white70),
           ),
-          const SizedBox(height: 18),
+          const SizedBox(height: 14),
           Container(
-            padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 12),
+            padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 12),
             decoration: BoxDecoration(
               color: const Color(0xFF0F172A),
               borderRadius: BorderRadius.circular(16),
@@ -9808,9 +10227,7 @@ class _BrainGamesHubScreenState extends State<BrainGamesHubScreen> {
               ],
             ),
           ),
-          const SizedBox(height: 18),
-          const Text('اختر الشكل الصحيح لإكمال النمط المنطقي:'),
-          const SizedBox(height: 12),
+          const SizedBox(height: 14),
           Wrap(
             spacing: 12,
             runSpacing: 12,
@@ -9830,16 +10247,18 @@ class _BrainGamesHubScreenState extends State<BrainGamesHubScreen> {
                     setState(() {
                       _patternCorrect = true;
                       _patternFeedback =
-                          '✅ تفكير منطقي عبقري! الإجابة ($option) صحيحة تماماً (+15 نقطة ذكاء)';
+                          '✅ تفكير منطقي عبقري في اللغز $levelNum! الإجابة ($option) صحيحة (+15 ذكاء)';
+                      _heroReactionMessage =
+                          '🦇 فارس الليل يحييك: استنتاج منطقي مذهل في المرحلة $levelNum من ١٠٠!';
                     });
                     await widget.appState.recordBrainGameWin(
-                      gameId: 'pattern_logic_$idx',
-                      gameTitle: 'مختبر المنطق والأنماط',
+                      gameId: 'pattern_logic_$levelNum',
+                      gameTitle: 'الألغاز والمنطق (لغز $levelNum من ١٠٠)',
                       earnedIqPoints: 15,
                       earnedStars: 1,
                     );
                     CalmVoiceService.instance.speakCalmly(
-                      'أحسنت التفكير المنطقي يا بطل! إجابتك صحيحة!',
+                      'أحسنت التفكير المنطقي في المرحلة $levelNum!',
                     );
                   } else {
                     setState(() {
@@ -9857,7 +10276,7 @@ class _BrainGamesHubScreenState extends State<BrainGamesHubScreen> {
             }).toList(),
           ),
           if (_patternFeedback != null) ...[
-            const SizedBox(height: 14),
+            const SizedBox(height: 12),
             Text(
               _patternFeedback!,
               textAlign: TextAlign.center,
@@ -9879,15 +10298,15 @@ class _BrainGamesHubScreenState extends State<BrainGamesHubScreen> {
               ),
               onPressed: () {
                 setState(() {
-                  _patternQuestionIndex++;
+                  _patternQuestionIndex = (_patternQuestionIndex + 1) % 100;
                   _patternFeedback = null;
                   _patternCorrect = false;
                 });
               },
               icon: const Icon(Icons.navigate_next),
-              label: const Text(
-                'اللغز المنطقي التالي',
-                style: TextStyle(fontWeight: FontWeight.bold),
+              label: Text(
+                'اللغز التالي (${(levelNum % 100) + 1} من ١٠٠)',
+                style: const TextStyle(fontWeight: FontWeight.bold),
               ),
             ),
           ),
@@ -9898,7 +10317,7 @@ class _BrainGamesHubScreenState extends State<BrainGamesHubScreen> {
 
   Widget _buildMemoryMatchGame() {
     return Container(
-      padding: const EdgeInsets.all(18),
+      padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: const Color(0xFF1E293B),
         borderRadius: BorderRadius.circular(22),
@@ -9906,42 +10325,42 @@ class _BrainGamesHubScreenState extends State<BrainGamesHubScreen> {
       ),
       child: Column(
         children: [
+          _buildHundredLevelSelectorBar(
+            currentLevelZeroBased: _memoryLevel - 1,
+            accentColor: const Color(0xFF14B8A6),
+            onSelectLevel: (newIdx) {
+              setState(() {
+                _memoryLevel = newIdx + 1;
+              });
+              _initMemoryGame();
+            },
+          ),
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      '🃏 تحدي الذاكرة البصرية — المستوى $_memoryLevel',
-                      style: const TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.white,
-                      ),
-                    ),
-                    const SizedBox(height: 4),
-                    const Text(
-                      'طابق البطاقات المتشابهة لتقوية الذاكرة والتركيز البصري!',
-                      style: TextStyle(fontSize: 12, color: Colors.white70),
-                    ),
-                  ],
+                child: Text(
+                  '🃏 الذاكرة البصرية (المرحلة $_memoryLevel من ١٠٠)',
+                  style: const TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.white,
+                  ),
                 ),
               ),
               OutlinedButton.icon(
                 onPressed: () {
                   setState(() {
-                    _memoryLevel = (_memoryLevel % 3) + 1;
+                    _memoryLevel = (_memoryLevel % 100) + 1;
                   });
                   _initMemoryGame();
                 },
-                icon: const Icon(Icons.layers_outlined, size: 16),
-                label: const Text('تغيير المجموعة'),
+                icon: const Icon(Icons.skip_next, size: 16),
+                label: const Text('المرحلة التالية'),
               ),
             ],
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: 10),
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceEvenly,
             children: [
@@ -9956,7 +10375,7 @@ class _BrainGamesHubScreenState extends State<BrainGamesHubScreen> {
               ),
             ],
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: 10),
           GridView.builder(
             shrinkWrap: true,
             physics: const NeverScrollableScrollPhysics(),
@@ -10007,9 +10426,18 @@ class _BrainGamesHubScreenState extends State<BrainGamesHubScreen> {
   }
 
   Widget _buildVisualMathGame() {
-    final bool isAdd = _mathMode == 'add';
+    final mathData =
+        HundredLevelGamesGenerator.getVisualMathLevel(_mathQuestionIndex);
+    final int levelNum = mathData['levelNumber'] as int;
+    final bool isAdd = (mathData['mode'] as String) == 'add';
+    final int a = mathData['a'] as int;
+    final int b = mathData['b'] as int;
+    final int target = mathData['target'] as int;
+    final String emoji = mathData['emoji'] as String;
+    final List<int> options = List<int>.from(mathData['options'] as List);
+
     return Container(
-      padding: const EdgeInsets.all(18),
+      padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: const Color(0xFF1E293B),
         borderRadius: BorderRadius.circular(22),
@@ -10017,23 +10445,34 @@ class _BrainGamesHubScreenState extends State<BrainGamesHubScreen> {
       ),
       child: Column(
         children: [
+          _buildHundredLevelSelectorBar(
+            currentLevelZeroBased: _mathQuestionIndex,
+            accentColor: const Color(0xFF38BDF8),
+            onSelectLevel: (newIdx) {
+              setState(() {
+                _mathQuestionIndex = newIdx;
+                _mathFeedback = null;
+                _mathAnswered = false;
+              });
+            },
+          ),
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               Expanded(
                 child: Text(
                   isAdd
-                      ? '🔢 تحدي الجمع المصور — الجولة $_mathRoundNumber'
-                      : '🔢 مغامرة العدّ البصري — الجولة $_mathRoundNumber',
+                      ? '🔢 الجمع المصور (المرحلة $levelNum من ١٠٠)'
+                      : '🔢 العدّ البصري (المرحلة $levelNum من ١٠٠)',
                   style: const TextStyle(
-                      fontSize: 16, fontWeight: FontWeight.bold),
+                      fontSize: 15, fontWeight: FontWeight.bold),
                 ),
               ),
               IconButton(
                 onPressed: () => CalmVoiceService.instance.speakCalmly(
                   isAdd
-                      ? 'اجمع المجموعتين معاً يا بطل: $_mathAddendA زائد $_mathAddendB يساوي كم؟'
-                      : 'عدّ الأشكال بهدوء يا بطل ثم اختر الرقم الصحيح!',
+                      ? 'المرحلة $levelNum: اجمع $a زائد $b يساوي كم؟'
+                      : 'المرحلة $levelNum: عدّ الأشكال بهدوء واختر الرقم الصحيح!',
                 ),
                 icon: const Icon(Icons.volume_up_rounded,
                     color: Color(0xFF38BDF8)),
@@ -10041,16 +10480,9 @@ class _BrainGamesHubScreenState extends State<BrainGamesHubScreen> {
             ],
           ),
           const SizedBox(height: 8),
-          Text(
-            isAdd
-                ? 'اجمع العناصر في المجموعتين ($_mathAddendA + $_mathAddendB) واختر الناتج الصحيح:'
-                : 'عدّ العناصر الموجودة داخل الصندوق واختر العدد الصحيح:',
-            style: const TextStyle(fontSize: 13, color: Colors.white70),
-          ),
-          const SizedBox(height: 16),
           Container(
             width: double.infinity,
-            padding: const EdgeInsets.all(18),
+            padding: const EdgeInsets.all(16),
             decoration: BoxDecoration(
               color: const Color(0xFF0F172A),
               borderRadius: BorderRadius.circular(18),
@@ -10066,8 +10498,8 @@ class _BrainGamesHubScreenState extends State<BrainGamesHubScreen> {
                           spacing: 6,
                           runSpacing: 6,
                           children: List.generate(
-                            _mathAddendA,
-                            (_) => Text(_mathEmoji,
+                            a,
+                            (_) => Text(emoji,
                                 style: const TextStyle(fontSize: 30)),
                           ),
                         ),
@@ -10075,7 +10507,7 @@ class _BrainGamesHubScreenState extends State<BrainGamesHubScreen> {
                       const Text(
                         '➕',
                         style: TextStyle(
-                            fontSize: 28,
+                            fontSize: 26,
                             fontWeight: FontWeight.bold,
                             color: Color(0xFFF59E0B)),
                       ),
@@ -10085,8 +10517,8 @@ class _BrainGamesHubScreenState extends State<BrainGamesHubScreen> {
                           spacing: 6,
                           runSpacing: 6,
                           children: List.generate(
-                            _mathAddendB,
-                            (_) => Text(_mathEmoji,
+                            b,
+                            (_) => Text(emoji,
                                 style: const TextStyle(fontSize: 30)),
                           ),
                         ),
@@ -10095,20 +10527,19 @@ class _BrainGamesHubScreenState extends State<BrainGamesHubScreen> {
                   )
                 : Wrap(
                     alignment: WrapAlignment.center,
-                    spacing: 14,
-                    runSpacing: 14,
+                    spacing: 12,
+                    runSpacing: 12,
                     children: List.generate(
-                      _mathTargetCount,
-                      (_) => Text(_mathEmoji,
-                          style: const TextStyle(fontSize: 36)),
+                      target,
+                      (_) => Text(emoji, style: const TextStyle(fontSize: 34)),
                     ),
                   ),
           ),
-          const SizedBox(height: 18),
+          const SizedBox(height: 16),
           Wrap(
             spacing: 12,
             runSpacing: 12,
-            children: _mathOptions.map((numOpt) {
+            children: options.map((numOpt) {
               return ElevatedButton(
                 style: ElevatedButton.styleFrom(
                   backgroundColor: const Color(0xFF0F172A),
@@ -10121,19 +10552,21 @@ class _BrainGamesHubScreenState extends State<BrainGamesHubScreen> {
                   ),
                 ),
                 onPressed: () async {
-                  if (numOpt == _mathTargetCount) {
+                  if (numOpt == target) {
                     if (!_mathAnswered) {
                       _mathAnswered = true;
                       await widget.appState.recordBrainGameWin(
-                        gameId: 'visual_math_$_mathRoundNumber',
-                        gameTitle: 'الحساب والجمع البصري',
+                        gameId: 'visual_math_$levelNum',
+                        gameTitle: 'الحساب البصري (المرحلة $levelNum من ١٠٠)',
                         earnedIqPoints: 15,
                         earnedStars: 1,
                       );
                     }
                     setState(() {
                       _mathFeedback =
-                          '🎉 عبقري في الحساب! الناتج الصحيح هو ($numOpt) (+15 نقطة ذكاء)';
+                          '🎉 عبقري في الحساب! الناتج ($numOpt) صحيح (+15 ذكاء)';
+                      _heroReactionMessage =
+                          '⚡ بيكا وسوبر نور يهتفان لك: إجابة حسابية متقنة في المرحلة $levelNum!';
                     });
                     CalmVoiceService.instance.speakCalmly(
                       'رائع يا بطل الحساب! الإجابة هي $numOpt!',
@@ -10157,7 +10590,7 @@ class _BrainGamesHubScreenState extends State<BrainGamesHubScreen> {
             }).toList(),
           ),
           if (_mathFeedback != null) ...[
-            const SizedBox(height: 14),
+            const SizedBox(height: 12),
             Text(
               _mathFeedback!,
               textAlign: TextAlign.center,
@@ -10165,7 +10598,7 @@ class _BrainGamesHubScreenState extends State<BrainGamesHubScreen> {
                   fontWeight: FontWeight.bold, color: Color(0xFF38BDF8)),
             ),
           ],
-          const SizedBox(height: 16),
+          const SizedBox(height: 14),
           SizedBox(
             width: double.infinity,
             child: ElevatedButton.icon(
@@ -10174,13 +10607,16 @@ class _BrainGamesHubScreenState extends State<BrainGamesHubScreen> {
                 foregroundColor: Colors.black87,
               ),
               onPressed: () {
-                _mathRoundNumber++;
-                _generateMathRound();
+                setState(() {
+                  _mathQuestionIndex = (_mathQuestionIndex + 1) % 100;
+                  _mathFeedback = null;
+                  _mathAnswered = false;
+                });
               },
               icon: const Icon(Icons.navigate_next),
-              label: const Text(
-                'مسألة الحساب التالية',
-                style: TextStyle(fontWeight: FontWeight.bold),
+              label: Text(
+                'المرحلة الحسابية التالية (${(levelNum % 100) + 1} من ١٠٠)',
+                style: const TextStyle(fontWeight: FontWeight.bold),
               ),
             ),
           ),
@@ -10190,8 +10626,9 @@ class _BrainGamesHubScreenState extends State<BrainGamesHubScreen> {
   }
 
   Widget _buildArabicWordBuilderGame() {
-    final int idx = _wordQuestionIndex % _arabicWordQuestions.length;
-    final q = _arabicWordQuestions[idx];
+    final q =
+        HundredLevelGamesGenerator.getArabicWordLevel(_wordQuestionIndex);
+    final int levelNum = q['levelNumber'] as int;
     final String emoji = q['emoji'] as String;
     final String fullWord = q['word'] as String;
     final String missingDisplay = q['missingDisplay'] as String;
@@ -10200,7 +10637,7 @@ class _BrainGamesHubScreenState extends State<BrainGamesHubScreen> {
     final String ans = q['answer'] as String;
 
     return Container(
-      padding: const EdgeInsets.all(18),
+      padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: const Color(0xFF1E293B),
         borderRadius: BorderRadius.circular(22),
@@ -10208,14 +10645,25 @@ class _BrainGamesHubScreenState extends State<BrainGamesHubScreen> {
       ),
       child: Column(
         children: [
+          _buildHundredLevelSelectorBar(
+            currentLevelZeroBased: _wordQuestionIndex,
+            accentColor: const Color(0xFFA855F7),
+            onSelectLevel: (newIdx) {
+              setState(() {
+                _wordQuestionIndex = newIdx;
+                _wordCorrect = false;
+                _wordFeedback = null;
+              });
+            },
+          ),
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               Expanded(
                 child: Text(
-                  '🔤 الذكاء اللغوي (${idx + 1} من ${_arabicWordQuestions.length})',
+                  '🔤 الذكاء اللغوي ($levelNum / 100)',
                   style: const TextStyle(
-                      fontSize: 17, fontWeight: FontWeight.bold),
+                      fontSize: 16, fontWeight: FontWeight.bold),
                 ),
               ),
               IconButton(
@@ -10228,16 +10676,17 @@ class _BrainGamesHubScreenState extends State<BrainGamesHubScreen> {
               ),
             ],
           ),
-          const SizedBox(height: 10),
-          Text(emoji, style: const TextStyle(fontSize: 56)),
           const SizedBox(height: 8),
+          Text(emoji, style: const TextStyle(fontSize: 54)),
+          const SizedBox(height: 6),
           Text(
             prompt,
-            style: const TextStyle(fontSize: 14, color: Colors.white70),
+            textAlign: TextAlign.center,
+            style: const TextStyle(fontSize: 13, color: Colors.white70),
           ),
           const SizedBox(height: 10),
           Container(
-            padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 12),
+            padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 10),
             decoration: BoxDecoration(
               color: const Color(0xFF0F172A),
               borderRadius: BorderRadius.circular(16),
@@ -10245,13 +10694,13 @@ class _BrainGamesHubScreenState extends State<BrainGamesHubScreen> {
             child: Text(
               _wordCorrect ? fullWord : '؟ $missingDisplay',
               style: const TextStyle(
-                fontSize: 28,
+                fontSize: 26,
                 fontWeight: FontWeight.bold,
                 color: Color(0xFFFDE68A),
               ),
             ),
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: 14),
           Wrap(
             spacing: 12,
             runSpacing: 12,
@@ -10272,11 +10721,13 @@ class _BrainGamesHubScreenState extends State<BrainGamesHubScreen> {
                     setState(() {
                       _wordCorrect = true;
                       _wordFeedback =
-                          '✅ أحسنت يا فصيح! حرف ($letter) يكمل كلمة ($fullWord) (+15 نقطة ذكاء)';
+                          '✅ أحسنت يا فصيح! حرف ($letter) يكمل كلمة ($fullWord) (+15 ذكاء)';
+                      _heroReactionMessage =
+                          '👧🎒 المستكشفة الصغيرة والشبل سيمبا يحيون فصاحتك في المرحلة $levelNum!';
                     });
                     await widget.appState.recordBrainGameWin(
-                      gameId: 'arabic_word_$idx',
-                      gameTitle: 'الذكاء اللغوي ($fullWord)',
+                      gameId: 'arabic_word_$levelNum',
+                      gameTitle: 'الذكاء اللغوي (المرحلة $levelNum من ١٠٠)',
                       earnedIqPoints: 15,
                       earnedStars: 1,
                     );
@@ -10313,7 +10764,7 @@ class _BrainGamesHubScreenState extends State<BrainGamesHubScreen> {
                   fontWeight: FontWeight.bold, color: Color(0xFFA855F7)),
             ),
           ],
-          const SizedBox(height: 16),
+          const SizedBox(height: 14),
           SizedBox(
             width: double.infinity,
             child: ElevatedButton.icon(
@@ -10323,15 +10774,15 @@ class _BrainGamesHubScreenState extends State<BrainGamesHubScreen> {
               ),
               onPressed: () {
                 setState(() {
-                  _wordQuestionIndex++;
+                  _wordQuestionIndex = (_wordQuestionIndex + 1) % 100;
                   _wordCorrect = false;
                   _wordFeedback = null;
                 });
               },
               icon: const Icon(Icons.navigate_next),
-              label: const Text(
-                'الكلمة العربية التالية',
-                style: TextStyle(fontWeight: FontWeight.bold),
+              label: Text(
+                'الكلمة التالية (${(levelNum % 100) + 1} من ١٠٠)',
+                style: const TextStyle(fontWeight: FontWeight.bold),
               ),
             ),
           ),
